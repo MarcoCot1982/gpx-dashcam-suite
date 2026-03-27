@@ -42,6 +42,8 @@ Reads a dashcam video file and extracts GPS coordinates that are burned into the
 - Dynamic file naming with timestamps
 - Live map preview of extracted points via StaticMap
 - Auto-stop on end-of-file with partial-save
+  
+<img width="1390" height="934" alt="image" src="https://github.com/user-attachments/assets/2fcfda56-8443-4ef3-9d21-26b2f53652c3" />
 
 ---
 
@@ -56,6 +58,8 @@ A "human-in-the-loop" GPX editor for fixing OCR artefacts and GPS noise. Display
 - Full undo history
 - Auto-save to a `_temp` file every 10 minutes
 - Export cleaned GPX
+
+<img width="1759" height="934" alt="image" src="https://github.com/user-attachments/assets/67130587-82bc-4901-928c-2659fa4d3559" />
 
 ---
 
@@ -80,6 +84,8 @@ Takes a clean GPX file and enriches each track point with a human-readable locat
 - Live map with last 200 geocoded points
 - `--input <file>` CLI flag for launching from Cache Editor
 
+<img width="1757" height="934" alt="image" src="https://github.com/user-attachments/assets/bace24e4-ef82-4957-a4ca-4cdf9c4fa289" />
+
 ---
 
 ### 4 · Cache Editor  `Cache_Editor.pyw`
@@ -93,6 +99,8 @@ A full GUI editor for the SQLite geocode cache produced by GPX Geocoder. Lets yo
 - Manual start/end index range selection
 - One-click re-geocode: deletes the stale `_geocoded.gpx` and relaunches GPX Geocoder
 - Fullscreen by default
+
+<img width="1763" height="934" alt="image" src="https://github.com/user-attachments/assets/fb757ee5-1622-48c1-99d1-7bea42d48f3e" />
 
 ---
 
@@ -108,6 +116,8 @@ Reads a geocoded GPX file and renders a black MP4 video that displays the road n
 - Font size, colour and background customisable from UI
 - Live map showing full track + current-point marker during render
 - Render progress bar with ETA
+
+<img width="1755" height="934" alt="image" src="https://github.com/user-attachments/assets/c6b1f942-9b38-4622-a75f-be661a80c570" />
 
 ---
 
