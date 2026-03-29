@@ -26,6 +26,9 @@ from PIL import Image, ImageTk
 
 VERSION="v1.1"; AUTHOR="Marco Cot"; CONTACT="marcocot1982@gmail.com"; SPLASH_SECONDS=4
 
+# Suppress the ffmpeg console window on Windows; no-op on Linux/Mac
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 RESOLUTIONS={"854 × 480  (480p)":(854,480),"1280 × 720  (720p)":(1280,720),"1920 × 1080 (1080p)":(1920,1080)}
 FPS_OPTIONS=[24,30,60]
 
@@ -135,17 +138,53 @@ def _ffmpeg_concat(chunk_files, output_path):
         subprocess.run(
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
              "-i", list_path, "-c", "copy", output_path],
-            check=True, capture_output=True
+            check=True, capture_output=True,
+            creationflags=_NO_WINDOW
         )
     finally:
         try: os.unlink(list_path)
         except: pass
 
+def _write_chunk_transparent(make_frame_rgba, duration, fps, w, h, output_path):
+    """Write RGBA frames to a WebM VP9 file via ffmpeg stdin pipe.
+    This bypasses moviepy entirely since moviepy only supports RGB frames.
+    VP9 + yuva420p is the standard cross-platform alpha video format."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{w}x{h}",
+        "-pix_fmt", "rgba",
+        "-r", str(fps),
+        "-i", "pipe:",
+        "-c:v", "libvpx-vp9",
+        "-pix_fmt", "yuva420p",
+        "-auto-alt-ref", "0",
+        "-b:v", "0", "-crf", "10",
+        output_path
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            creationflags=_NO_WINDOW)
+    try:
+        n_frames = max(1, int(duration * fps))
+        for fi in range(n_frames):
+            t = fi / fps
+            frame = make_frame_rgba(t)   # H x W x 4 uint8
+            proc.stdin.write(frame.tobytes())
+        proc.stdin.close()
+        proc.wait()
+    except Exception:
+        try: proc.kill()
+        except: pass
+        raise
+
+
 def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
                   settings, pause_event, stop_event,
                   frames_before, total_frames_all, wall_start,
-                  progress_cb, use_flags, stopped, last_pt):
-    """Render points [chunk_start, chunk_end) into a VideoClip and return it."""
+                  progress_cb, use_flags, transparent, stopped, last_pt):
+    """Render points [chunk_start, chunk_end). Returns (clip_or_None, duration).
+    When transparent=True, clip is None and make_frame_rgba is used instead via
+    _write_chunk_transparent — caller must use that path."""
     w,h    = settings["resolution"]; fig_w,fig_h = w/100, h/100
     fps    = settings["fps"];        bg = settings["bg_color"]
     tc     = settings["text_color"]; cs = settings["cmt_fontsize"]
@@ -209,7 +248,10 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
         progress_cb(cf_total, total_frames_all, eta_s, ci, n_pts, cc, ct_str, use_flags)
 
         fig,ax = plt.subplots(figsize=(fig_w,fig_h))
-        fig.patch.set_facecolor(bg); ax.set_facecolor(bg)
+        if transparent:
+            fig.patch.set_facecolor("none"); ax.set_facecolor("none")
+        else:
+            fig.patch.set_facecolor(bg); ax.set_facecolor(bg)
         fig.subplots_adjust(left=0,right=1,top=1,bottom=0); ax.set_axis_off()
         ax.axhline(y=0.22,color=tc,linewidth=0.4,alpha=0.25)
         ax.text(xp, 0.18, cc_text, color=tc, fontsize=cs, ha=ha, va="top",
@@ -245,11 +287,22 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
             )
             ax.add_artist(ab)
 
-        fig.canvas.draw(); img = mplfig_to_npimage(fig); plt.close(fig)
+        fig.canvas.draw()
+        if transparent:
+            # RGBA extraction: preserves alpha for VP9 WebM output
+            w_px = int(fig.get_figwidth() * fig.dpi)
+            h_px = int(fig.get_figheight() * fig.dpi)
+            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h_px, w_px, 4).copy()
+        else:
+            img = mplfig_to_npimage(fig)
+        plt.close(fig)
         return img
 
+    if transparent:
+        # Return None clip; caller uses make_frame directly via _write_chunk_transparent
+        return None, chunk_dur, make_frame
     clip = VideoClip(make_frame, duration=chunk_dur).set_fps(fps)
-    return clip, chunk_dur
+    return clip, chunk_dur, None
 
 def generate_video(comments, durations, output_path, settings,
                    pause_event, stop_event, progress_cb, log_cb, start_point=0):
@@ -263,8 +316,15 @@ def generate_video(comments, durations, output_path, settings,
     if eff_duration <= 0:
         log_cb("⚠  No duration — skipped."); return False, start_point
 
-    fps              = settings["fps"]
-    use_flags        = settings.get("use_flags", False)
+    fps         = settings["fps"]
+    use_flags   = settings.get("use_flags", False)
+    transparent = settings.get("transparent", False)
+    w, h        = settings["resolution"]
+
+    # Transparent output uses WebM/VP9 (supports alpha); opaque uses mp4/H.264
+    ext     = ".webm" if transparent else ".mp4"
+    chunk_codec = "webm"   # used only for stray-file cleanup pattern
+
     total_frames_all = int(eff_duration * fps)
     wall_start       = time.time()
     stopped          = [False]
@@ -274,10 +334,7 @@ def generate_video(comments, durations, output_path, settings,
     stem    = os.path.splitext(os.path.basename(output_path))[0]
     pid     = os.getpid()
 
-    # Incremental strategy: at any moment only ONE chunk temp file exists.
-    # After each chunk: concat(current_partial, chunk) → new_partial,
-    # then delete both inputs immediately. No file accumulation.
-    current_partial = [None]   # path of latest cumulative partial
+    current_partial = [None]
     chunk_idx       = [0]
     frames_before   = 0
 
@@ -287,7 +344,8 @@ def generate_video(comments, durations, output_path, settings,
                 try: os.remove(p)
                 except: pass
 
-    log_cb(f"🎬  Rendering {n_pts - start_point} points in chunks of {AUTOSAVE_EVERY}")
+    mode_str = "transparent WebM" if transparent else "opaque MP4"
+    log_cb(f"🎬  Rendering {n_pts - start_point} points in chunks of {AUTOSAVE_EVERY} [{mode_str}]")
 
     pt = start_point
     try:
@@ -296,27 +354,36 @@ def generate_video(comments, durations, output_path, settings,
 
             chunk_start = pt
             chunk_end   = min(pt + AUTOSAVE_EVERY, n_pts)
-            chunk_file  = os.path.join(out_dir, f"_chunk_{stem}_{pid}_{chunk_idx[0]:04d}.mp4")
+            chunk_file  = os.path.join(out_dir, f"_chunk_{stem}_{pid}_{chunk_idx[0]:04d}{ext}")
             chunk_idx[0] += 1
 
-            clip, chunk_dur = _render_chunk(
+            clip, chunk_dur, make_frame_rgba = _render_chunk(
                 comments, cum_times, chunk_start, chunk_end, n_pts,
                 settings, pause_event, stop_event,
                 frames_before, total_frames_all,
-                wall_start, progress_cb, use_flags, stopped, last_pt
+                wall_start, progress_cb, use_flags, transparent, stopped, last_pt
             )
 
-            if clip is None:
+            # chunk_dur==0 means this chunk had no timeline span — skip
+            if chunk_dur <= 0:
                 pt = chunk_end; continue
 
+            # stopped mid-chunk before any frame was rendered
+            if stopped[0] and clip is None and make_frame_rgba is None:
+                break
+
             try:
-                clip.write_videofile(chunk_file, codec="libx264", fps=fps,
-                                     verbose=False, logger=None)
+                if transparent:
+                    # Write RGBA frames directly to ffmpeg → VP9 WebM with alpha
+                    _write_chunk_transparent(make_frame_rgba, chunk_dur, fps, w, h, chunk_file)
+                else:
+                    clip.write_videofile(chunk_file, codec="libx264", fps=fps,
+                                         verbose=False, logger=None)
+
                 frames_before += int(chunk_dur * fps)
 
-                # build new cumulative partial
                 n_done       = min(chunk_end, n_pts)
-                partial_name = f"{stem}_{n_done:04d}.mp4"
+                partial_name = f"{stem}_{n_done:04d}{ext}"
                 partial_path = os.path.join(out_dir, partial_name)
                 prev_partial = current_partial[0]
 
@@ -324,14 +391,13 @@ def generate_video(comments, durations, output_path, settings,
                     _ffmpeg_concat([prev_partial, chunk_file], partial_path)
                     _del(prev_partial, chunk_file)
                 else:
-                    # first chunk — just move it; no concat needed
                     shutil.move(chunk_file, partial_path)
 
                 current_partial[0] = partial_path
                 log_cb(f"💾  Partial → {partial_name}")
 
             except Exception as e:
-                _del(chunk_file)   # always remove the raw chunk on failure
+                _del(chunk_file)
                 log_cb(f"⚠  Chunk {chunk_idx[0]-1} failed: {e}", "err")
 
             if stopped[0] or stop_event.is_set():
@@ -339,9 +405,9 @@ def generate_video(comments, durations, output_path, settings,
             pt = chunk_end
 
     finally:
-        # Belt-and-suspenders: any stray _chunk_ files for this pid
+        # Remove any stray chunk temps for this render
         for f in os.listdir(out_dir):
-            if f.startswith(f"_chunk_{stem}_{pid}_") and f.endswith(".mp4"):
+            if f.startswith(f"_chunk_{stem}_{pid}_"):
                 _del(os.path.join(out_dir, f))
 
     # ── finalise ──────────────────────────────────────────────────────────────
@@ -395,8 +461,9 @@ current_zoom=[12]
 res_var=tk.StringVar(value="1280 × 720  (720p)"); fps_var=tk.IntVar(value=24)
 bg_color_var=tk.StringVar(value="#000000"); txt_color_var=tk.StringVar(value="#ffffff")
 cmt_size_var=tk.IntVar(value=20); ts_size_var=tk.IntVar(value=13)
-align_var=tk.StringVar(value="right"); dest_var=tk.IntVar(value=1); custom_dest=tk.StringVar(value="")
-use_flags_var=tk.BooleanVar(value=False)
+align_var=tk.StringVar(value="right"); dest_var=tk.IntVar(value=2); custom_dest=tk.StringVar(value="")
+use_flags_var=tk.BooleanVar(value=True)
+transparent_var=tk.BooleanVar(value=False)
 start_point_var=tk.StringVar(value="")
 
 def show_splash():
@@ -411,14 +478,17 @@ def show_splash():
     pbv=tk.DoubleVar(); pb=ttk.Progressbar(body,variable=pbv,maximum=100,length=580); pb.pack()
     pct=tk.Label(body,text="Loading…",font=("Consolas",8),bg=C["bg"],fg=C["dim"]); pct.pack(pady=4)
     tk.Frame(sp,bg=C["accent"],height=3).pack(fill="x",side="bottom")
-    def fake():
-        steps=max(20,SPLASH_SECONDS*25)
-        for i in range(steps+1):
-            pbv.set(i/steps*100); pct.config(text=f"{int(i/steps*100)}%"); sp.update(); time.sleep(SPLASH_SECONDS/steps)
-        sp.destroy(); root.deiconify()
-        try: root.state("zoomed")
-        except: pass
-    root.withdraw(); threading.Thread(target=fake,daemon=True).start()
+    steps=max(20,SPLASH_SECONDS*25)
+    interval_ms=max(1,int(SPLASH_SECONDS/steps*1000))
+    def step(i=0):
+        if i>steps:
+            sp.destroy(); root.deiconify()
+            try: root.state("zoomed")
+            except: pass
+            return
+        pbv.set(i/steps*100); pct.config(text=f"{int(i/steps*100)}%")
+        root.after(interval_ms, step, i+1)
+    root.withdraw(); root.after(10, step)
 
 show_splash()
 
@@ -553,9 +623,23 @@ def toggle_flags():
         flag_btn[0].config(text="🏳  Flags ON",bg=C["blue"])
     else:
         flag_btn[0].config(text="ABC  Country Code",bg=C["dim"])
-fb=mk_btn(cr,"ABC  Country Code",C["dim"],toggle_flags,font=("Consolas",8,"bold"))
+# initial state matches default (True)
+fb=mk_btn(cr,"\U0001f3f3  Flags ON",C["blue"],toggle_flags,font=("Consolas",8,"bold"))
 fb.pack(fill="x",pady=(4,0)); flag_btn[0]=fb
-tk.Label(cr,text="flags shown as image\nas emoji is not supported by Windows",
+tk.Label(cr,text="flags shown as PNG (Windows-safe)",
+         font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
+
+# ── Transparent background toggle ────────────────────────────────────────────
+transp_btn=[None]
+def toggle_transparent():
+    transparent_var.set(not transparent_var.get())
+    if transparent_var.get():
+        transp_btn[0].config(text="\u25a1  Transparent ON",bg=C["blue"])
+    else:
+        transp_btn[0].config(text="\u25a0  Opaque BG",bg=C["dim"])
+tb2=mk_btn(cr,"\u25a0  Opaque BG",C["dim"],toggle_transparent,font=("Consolas",8,"bold"))
+tb2.pack(fill="x",pady=(4,0)); transp_btn[0]=tb2
+tk.Label(cr,text="transparent → saves as .webm (VP9 alpha)",
          font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
 
 sec_hdr(right,"PROGRESS")
@@ -686,14 +770,14 @@ def pump_ui_queue():
                 rel_pt=abs_pt+1   # 1-based for display
                 pct=int(cf/tf*100) if tf else 0
                 current_pb["value"]=pct; current_pct.config(text=f"{pct:3d}%")
+                eta_lbl.config(text=f"ETA  {eta}"); point_lbl.config(text=f"Point {rel_pt} / {tp}")
                 try:
-                    h,m,s = map(int, eta.split(":"))
                     from datetime import timedelta
-                    finish = datetime.now().replace(microsecond=0) + timedelta(hours=h,minutes=m,seconds=s)
-                    eta_text = f"ETA  {eta}   [h {finish.strftime('%H:%M')}]"
+                    eh,em,es=map(int,eta.split(":"))
+                    finish=datetime.now().replace(microsecond=0)+timedelta(hours=eh,minutes=em,seconds=es)
+                    eta_lbl.config(text=f"ETA  {eta}   [{finish.strftime('%H:%M')}]")
                 except Exception:
-                    eta_text = f"ETA  {eta}"
-                eta_lbl.config(text=eta_text); point_lbl.config(text=f"Point {rel_pt} / {tp}")
+                    pass
                 # Extract flag if present
                 flag_img = None
                 display_cmt = cmt or "—"
@@ -744,7 +828,7 @@ def pump_ui_queue():
 root.after(80,pump_ui_queue)
 
 def render_thread(targets,settings):
-    total=len(targets); done=0
+    total=len(targets); done=0; n_ok=0; n_err=0
     def pcb(cf,tf,eta,abs_pt,tp,cmt,ts,use_fl): ui_queue.put(("progress",cf,tf,eta,abs_pt,tp,cmt,ts,use_fl))
     def lcb(msg,tag=""): ui_queue.put(("log",msg,tag))
     start_point=settings.pop("start_point",0)
@@ -763,22 +847,21 @@ def render_thread(targets,settings):
             out_folder=resolve_output_folder(fp)
             if not out_folder: lcb("⚠  No output folder — skipped.","err"); ui_queue.put(("file_done",fp,False)); done+=1; ui_queue.put(("overall",done,total)); continue
             stem=os.path.splitext(os.path.basename(fp))[0]
-            out_path=os.path.join(out_folder,stem+".mp4")
+            ext=".webm" if settings.get("transparent",False) else ".mp4"
+            out_path=os.path.join(out_folder,stem+ext)
             ok,last_pt=generate_video(comments,durations,out_path,settings,pause_event,stop_event,pcb,lambda m,t="ok":lcb(m,t),start_point=start_point)
             if ok:
-                lcb(f"✅  Saved → {out_path}","ok")
+                lcb(f"✅  Saved → {out_path}","ok"); n_ok+=1
             else:
-                lcb(f"⏹  Stopped at point {last_pt} — partial file kept.","err")
+                lcb(f"⏹  Stopped at point {last_pt} — partial file kept.","err"); n_err+=1
             ui_queue.put(("file_done",fp,ok))
-        except Exception as e: lcb(f"❌  Error: {e}","err"); ui_queue.put(("file_done",fp,False))
+        except Exception as e: lcb(f"❌  Error: {e}","err"); ui_queue.put(("file_done",fp,False)); n_err+=1
         done+=1; ui_queue.put(("overall",done,total))
         if stop_event.is_set(): break
         start_point=0   # start_point only applies to the first file
     if stop_event.is_set():
         stop_event.clear(); ui_queue.put(("all_done","Render stopped."))
     else:
-        n_ok=sum(1 for fp in targets if file_status.get(fp)=="done")
-        n_err=sum(1 for fp in targets if file_status.get(fp)=="error")
         msg=f"Render complete — {n_ok} succeeded, {n_err} failed."
         lcb(msg,"ok"); ui_queue.put(("all_done",msg))
     processing_state["running"]=False
@@ -791,6 +874,7 @@ def start_rendering():
               "bg_color":bg_color_var.get(),"text_color":txt_color_var.get(),
               "cmt_fontsize":cmt_size_var.get(),"time_fontsize":ts_size_var.get(),
               "text_align":align_var.get(),"use_flags":use_flags_var.get(),
+              "transparent":transparent_var.get(),
               "start_point":max(0,int(start_point_var.get())) if start_point_var.get().strip().isdigit() else 0}
     stop_event.clear(); pause_event.set(); processing_state["running"]=True
     overall_pb["value"]=0; overall_pct.config(text="  0%"); pause_btn_ref[0].config(text="⏸  Pause")
