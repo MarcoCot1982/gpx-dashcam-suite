@@ -408,23 +408,33 @@ def show_splash_then_main():
              font=("Consolas",22,"bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(28,4))
     tk.Label(body, text=f"{VERSION}  ·  by {AUTHOR}  ·  {datetime.now().year}",
              font=("Consolas",9), bg=C["bg"], fg=C["muted"]).pack()
-    tk.Label(body, text="Add roads to your tracks · Gotta cache 'em all",
+    tk.Label(body, text="reverse geocode trackpoints · cache everything",
              font=("Consolas",9,"italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4,16))
     pbv = tk.DoubleVar()
     pb  = ttk.Progressbar(body, variable=pbv, maximum=100, length=540); pb.pack()
-    pct = tk.Label(body, text="Loading…", font=("Consolas",8), bg=C["bg"], fg=C["dim"])
+    pct = tk.Label(body, text="0%", font=("Consolas",8), bg=C["bg"], fg=C["dim"])
     pct.pack(pady=4)
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x", side="bottom")
-    def fake():
-        steps = max(15, SPLASH_SECONDS*20)
-        for i in range(steps+1):
-            pbv.set(i/steps*100); pct.config(text=f"{int(i/steps*100)}%"); sp.update()
-            time.sleep(SPLASH_SECONDS/steps)
-        sp.destroy(); root.deiconify()
-        try: root.state("zoomed")
-        except: pass
+
+    steps      = max(15, SPLASH_SECONDS * 20)
+    interval_ms = int(SPLASH_SECONDS * 1000 / steps)
+
+    def _step(i):
+        if not sp.winfo_exists():
+            return
+        pct_val = int(i / steps * 100)
+        pbv.set(pct_val)
+        pct.config(text=f"{pct_val}%")
+        if i < steps:
+            root.after(interval_ms, _step, i + 1)
+        else:
+            sp.destroy()
+            root.deiconify()
+            try: root.state("zoomed")
+            except: pass
+
     root.withdraw()
-    threading.Thread(target=fake, daemon=True).start()
+    root.after(interval_ms, _step, 1)
 
 show_splash_then_main()
 
@@ -796,7 +806,7 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
         elapsed  = time.time() - t_start
         per_pt   = elapsed / geocoded if geocoded else 0
         remain   = (total - i - 1) * per_pt
-        eta_str  = f"ETA {int(remain//60)}:{int(remain%60):02d}" if remain > 0 else ""
+        eta_str  = f"ETA {int(remain//60)}m{int(remain%60):02d}s" if remain > 0 else ""
 
         # progress
         pct = ((i + 1) / total) * 100

@@ -203,7 +203,7 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
     t_to   = cum_times[chunk_end] if chunk_end < n_pts else cum_times[-1]
     chunk_dur = t_to - t_from
     if chunk_dur <= 0:
-        return None, chunk_dur
+        return None, chunk_dur, None
 
     def make_frame(t):
         # pause / stop
@@ -425,6 +425,139 @@ def generate_video(comments, durations, output_path, settings,
 
     return ok, last_pt[0]
 
+def generate_video_dual(comments, durations, opaque_path, transp_path, settings,
+                        pause_event, stop_event, progress_cb, log_cb, start_point=0):
+    """Render opaque (.mp4) and transparent (.webm) alternating every AUTOSAVE_EVERY points.
+    ETA is doubled since each chunk is rendered twice."""
+    cum_times = [0.0]
+    for i in range(1, len(comments)):
+        cum_times.append(cum_times[-1] + max(durations[i], 0))
+
+    n_pts        = len(comments)
+    t_offset     = cum_times[start_point] if start_point < n_pts else 0.0
+    eff_duration = cum_times[-1] - t_offset
+    if eff_duration <= 0:
+        log_cb("⚠  No duration — skipped."); return False, start_point
+
+    fps       = settings["fps"]
+    use_flags = settings.get("use_flags", False)
+    w, h      = settings["resolution"]
+
+    # Double total frames so ETA naturally reads ×2
+    total_frames_all = 2 * int(eff_duration * fps)
+    wall_start       = time.time()
+    stopped          = [False]
+    last_pt          = [start_point]
+    frames_before    = [0]   # mutable int shared across both passes
+
+    out_dir  = os.path.dirname(opaque_path) or "."
+    stem     = os.path.splitext(os.path.basename(opaque_path))[0]
+    pid      = os.getpid()
+
+    opaque_partial = [None]
+    transp_partial = [None]
+    chunk_idx      = [0]
+
+    def _del(*paths):
+        for p in paths:
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except: pass
+
+    log_cb(f"🎬  Dual render — {n_pts - start_point} pts · chunks of {AUTOSAVE_EVERY} · ETA ×2")
+
+    pt = start_point
+    try:
+        while pt < n_pts:
+            if stop_event.is_set(): stopped[0] = True; break
+
+            chunk_start = pt
+            chunk_end   = min(pt + AUTOSAVE_EVERY, n_pts)
+            n_done      = min(chunk_end, n_pts)
+
+            # ── OPAQUE pass ───────────────────────────────────────────────────
+            s_op = dict(settings, transparent=False)
+            cf_op = os.path.join(out_dir, f"_chunk_{stem}_{pid}_{chunk_idx[0]:04d}.mp4")
+            chunk_idx[0] += 1
+
+            clip, cdur, _ = _render_chunk(
+                comments, cum_times, chunk_start, chunk_end, n_pts,
+                s_op, pause_event, stop_event,
+                frames_before[0], total_frames_all,
+                wall_start, progress_cb, use_flags, False, stopped, last_pt
+            )
+            if stopped[0] or stop_event.is_set(): stopped[0] = True; break
+
+            if cdur > 0 and clip is not None:
+                try:
+                    clip.write_videofile(cf_op, codec="libx264", fps=fps, verbose=False, logger=None)
+                    frames_before[0] += int(cdur * fps)
+                    pname = f"{stem}_{n_done:04d}.mp4"
+                    ppath = os.path.join(out_dir, pname)
+                    prev  = opaque_partial[0]
+                    if prev and os.path.exists(prev):
+                        _ffmpeg_concat([prev, cf_op], ppath); _del(prev, cf_op)
+                    else:
+                        shutil.move(cf_op, ppath)
+                    opaque_partial[0] = ppath
+                    log_cb(f"💾  Opaque → {pname}")
+                except Exception as e:
+                    _del(cf_op); log_cb(f"⚠  Opaque chunk failed: {e}", "err")
+
+            if stopped[0] or stop_event.is_set(): stopped[0] = True; break
+
+            # ── TRANSPARENT pass ──────────────────────────────────────────────
+            s_tr = dict(settings, transparent=True)
+            cf_tr = os.path.join(out_dir, f"_chunk_{stem}_{pid}_{chunk_idx[0]:04d}.webm")
+            chunk_idx[0] += 1
+
+            _, cdur_tr, mfr = _render_chunk(
+                comments, cum_times, chunk_start, chunk_end, n_pts,
+                s_tr, pause_event, stop_event,
+                frames_before[0], total_frames_all,
+                wall_start, progress_cb, use_flags, True, stopped, last_pt
+            )
+            if stopped[0] or stop_event.is_set(): stopped[0] = True; break
+
+            if cdur_tr > 0 and mfr is not None:
+                try:
+                    _write_chunk_transparent(mfr, cdur_tr, fps, w, h, cf_tr)
+                    frames_before[0] += int(cdur_tr * fps)
+                    pname = f"{stem}_{n_done:04d}.webm"
+                    ppath = os.path.join(out_dir, pname)
+                    prev  = transp_partial[0]
+                    if prev and os.path.exists(prev):
+                        _ffmpeg_concat([prev, cf_tr], ppath); _del(prev, cf_tr)
+                    else:
+                        shutil.move(cf_tr, ppath)
+                    transp_partial[0] = ppath
+                    log_cb(f"💾  Transp → {pname}")
+                except Exception as e:
+                    _del(cf_tr); log_cb(f"⚠  Transp chunk failed: {e}", "err")
+
+            if stopped[0] or stop_event.is_set(): stopped[0] = True; break
+            pt = chunk_end
+
+    finally:
+        for f in os.listdir(out_dir):
+            if f.startswith(f"_chunk_{stem}_{pid}_"):
+                _del(os.path.join(out_dir, f))
+
+    ok = not stopped[0]
+
+    for partial, final in [(opaque_partial[0], opaque_path), (transp_partial[0], transp_path)]:
+        if partial and os.path.exists(partial):
+            if ok:
+                try:
+                    if os.path.exists(final): os.remove(final)
+                    os.rename(partial, final)
+                except Exception as e:
+                    log_cb(f"⚠  Could not rename to final: {e}", "err")
+            else:
+                log_cb(f"⏹  Partial kept → {os.path.basename(partial)}")
+
+    return ok, last_pt[0]
+
 root=tk.Tk(); root.title(f"GPX Comment Video Generator  {VERSION}"); root.configure(bg=C["bg"])
 try: root.state("zoomed")
 except: root.geometry("1440x860")
@@ -464,6 +597,7 @@ cmt_size_var=tk.IntVar(value=20); ts_size_var=tk.IntVar(value=13)
 align_var=tk.StringVar(value="right"); dest_var=tk.IntVar(value=2); custom_dest=tk.StringVar(value="")
 use_flags_var=tk.BooleanVar(value=True)
 transparent_var=tk.BooleanVar(value=False)
+both_var=tk.BooleanVar(value=False)
 start_point_var=tk.StringVar(value="")
 
 def show_splash():
@@ -620,11 +754,11 @@ flag_btn=[None]
 def toggle_flags():
     use_flags_var.set(not use_flags_var.get())
     if use_flags_var.get():
-        flag_btn[0].config(text="🏳  Flags ON",bg=C["blue"])
+        flag_btn[0].config(text="🏳  Flags ON", bg=C["orange"], fg="white")
     else:
-        flag_btn[0].config(text="ABC  Country Code",bg=C["dim"])
+        flag_btn[0].config(text="ABC  Country Code", bg=C["panel2"], fg="white")
 # initial state matches default (True)
-fb=mk_btn(cr,"\U0001f3f3  Flags ON",C["blue"],toggle_flags,font=("Consolas",8,"bold"))
+fb=mk_btn(cr,"\U0001f3f3  Flags ON",C["orange"],toggle_flags,font=("Consolas",8,"bold"))
 fb.pack(fill="x",pady=(4,0)); flag_btn[0]=fb
 tk.Label(cr,text="flags shown as PNG (Windows-safe)",
          font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
@@ -634,12 +768,25 @@ transp_btn=[None]
 def toggle_transparent():
     transparent_var.set(not transparent_var.get())
     if transparent_var.get():
-        transp_btn[0].config(text="\u25a1  Transparent ON",bg=C["blue"])
+        transp_btn[0].config(text="□  Transparent ON", bg=C["orange"], fg="white")
     else:
-        transp_btn[0].config(text="\u25a0  Opaque BG",bg=C["dim"])
-tb2=mk_btn(cr,"\u25a0  Opaque BG",C["dim"],toggle_transparent,font=("Consolas",8,"bold"))
+        transp_btn[0].config(text="■  Opaque BG", bg=C["panel2"], fg="white")
+tb2=mk_btn(cr,"■  Opaque BG",C["panel2"],toggle_transparent,font=("Consolas",8,"bold"))
 tb2.pack(fill="x",pady=(4,0)); transp_btn[0]=tb2
 tk.Label(cr,text="transparent → saves as .webm (VP9 alpha)",
+         font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
+
+# ── Both opaque + transparent toggle ─────────────────────────────────────────
+both_btn=[None]
+def toggle_both():
+    both_var.set(not both_var.get())
+    if both_var.get():
+        both_btn[0].config(text="⊕  Both ON", bg=C["orange"], fg="white")
+    else:
+        both_btn[0].config(text="⊕  Both: OFF", bg=C["panel2"], fg="white")
+tb3=mk_btn(cr,"⊕  Both: OFF",C["panel2"],toggle_both,font=("Consolas",8,"bold"))
+tb3.pack(fill="x",pady=(4,0)); both_btn[0]=tb3
+tk.Label(cr,text="renders opaque + transparent, alternating\nevery 100 pts · ETA shown ×2",
          font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
 
 sec_hdr(right,"PROGRESS")
@@ -847,14 +994,24 @@ def render_thread(targets,settings):
             out_folder=resolve_output_folder(fp)
             if not out_folder: lcb("⚠  No output folder — skipped.","err"); ui_queue.put(("file_done",fp,False)); done+=1; ui_queue.put(("overall",done,total)); continue
             stem=os.path.splitext(os.path.basename(fp))[0]
-            ext=".webm" if settings.get("transparent",False) else ".mp4"
-            out_path=os.path.join(out_folder,stem+ext)
-            ok,last_pt=generate_video(comments,durations,out_path,settings,pause_event,stop_event,pcb,lambda m,t="ok":lcb(m,t),start_point=start_point)
-            if ok:
-                lcb(f"✅  Saved → {out_path}","ok"); n_ok+=1
+            if settings.get("both", False):
+                opaque_path = os.path.join(out_folder, stem + ".mp4")
+                transp_path = os.path.join(out_folder, stem + ".webm")
+                ok,last_pt=generate_video_dual(comments,durations,opaque_path,transp_path,settings,pause_event,stop_event,pcb,lambda m,t="ok":lcb(m,t),start_point=start_point)
+                if ok:
+                    lcb(f"✅  Saved → {os.path.basename(opaque_path)} + {os.path.basename(transp_path)}","ok"); n_ok+=1
+                else:
+                    lcb(f"⏹  Stopped at point {last_pt} — partial files kept.","err"); n_err+=1
+                ui_queue.put(("file_done",fp,ok))
             else:
-                lcb(f"⏹  Stopped at point {last_pt} — partial file kept.","err"); n_err+=1
-            ui_queue.put(("file_done",fp,ok))
+                ext=".webm" if settings.get("transparent",False) else ".mp4"
+                out_path=os.path.join(out_folder,stem+ext)
+                ok,last_pt=generate_video(comments,durations,out_path,settings,pause_event,stop_event,pcb,lambda m,t="ok":lcb(m,t),start_point=start_point)
+                if ok:
+                    lcb(f"✅  Saved → {out_path}","ok"); n_ok+=1
+                else:
+                    lcb(f"⏹  Stopped at point {last_pt} — partial file kept.","err"); n_err+=1
+                ui_queue.put(("file_done",fp,ok))
         except Exception as e: lcb(f"❌  Error: {e}","err"); ui_queue.put(("file_done",fp,False)); n_err+=1
         done+=1; ui_queue.put(("overall",done,total))
         if stop_event.is_set(): break
@@ -875,6 +1032,7 @@ def start_rendering():
               "cmt_fontsize":cmt_size_var.get(),"time_fontsize":ts_size_var.get(),
               "text_align":align_var.get(),"use_flags":use_flags_var.get(),
               "transparent":transparent_var.get(),
+              "both":both_var.get(),
               "start_point":max(0,int(start_point_var.get())) if start_point_var.get().strip().isdigit() else 0}
     stop_event.clear(); pause_event.set(); processing_state["running"]=True
     overall_pb["value"]=0; overall_pct.config(text="  0%"); pause_btn_ref[0].config(text="⏸  Pause")

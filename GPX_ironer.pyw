@@ -93,6 +93,7 @@ class IronApp:
         self._dirty           = False      # True after any unsaved change
         self._last_autosave   = time.time()
         self._last_temp_path  = ""
+        self._pending_center  = None       # ("fit",) or ("point", lat, lon, zoom)
 
         # ── ttk style ─────────────────────────────────────────────────────────
         sty = ttk.Style(root); sty.theme_use("clam")
@@ -120,8 +121,8 @@ class IronApp:
         # tk vars
         self.max_kph_iron       = tk.StringVar(value="5000")
         self.max_kph_bridge     = tk.StringVar(value="200")
-        self.marker_freq_var    = tk.StringVar(value="10")
-        self.color_interval_var = tk.StringVar(value="100")
+        self.marker_freq_var    = tk.StringVar(value="100")
+        self.color_interval_var = tk.StringVar(value="10")
 
         self._build_ui()
         self._schedule_autosave()
@@ -310,6 +311,7 @@ class IronApp:
         self.map_widget.set_tile_server("https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
         self.map_widget.set_position(45.0, 7.0)
         self.map_widget.set_zoom(5)
+        self.map_widget.add_left_click_map_command(self._on_map_click)
 
         # ── STATUS BAR ────────────────────────────────────────────────────────
         sb = tk.Frame(self.root, bg=C["panel"], height=26)
@@ -381,6 +383,7 @@ class IronApp:
         self._last_autosave = time.time()
         self.autosave_lbl.config(text="")
         self._set_status(f"Loaded {len(self.points)} points  ·  {self.current_filename}")
+        self._pending_center = ("fit",)
         self.refresh_map_and_tree()
 
     def _save_to_path(self, path):
@@ -495,14 +498,20 @@ class IronApp:
                 if i % mark_f == 0:
                     self.map_widget.set_marker(self.points[i][0], self.points[i][1], text=str(i))
 
-        # fit map to track on first load
-        if self.points:
-            lats = [p[0] for p in self.points]; lons = [p[1] for p in self.points]
-            self.map_widget.set_position((min(lats)+max(lats))/2, (min(lons)+max(lons))/2)
-            span = max(max(lats)-min(lats), max(lons)-min(lons))
-            z = 7 if span>5 else 9 if span>2 else 10 if span>1 else 12 if span>0.3 else 13 if span>0.1 else 14
-            self._zoom_level[0] = z
-            self.map_widget.set_zoom(z)
+        # center map only when explicitly requested via _pending_center
+        if self._pending_center and self.points:
+            kind = self._pending_center[0]
+            if kind == "fit":
+                lats = [p[0] for p in self.points]; lons = [p[1] for p in self.points]
+                self.map_widget.set_position((min(lats)+max(lats))/2, (min(lons)+max(lons))/2)
+                span = max(max(lats)-min(lats), max(lons)-min(lons))
+                z = 7 if span>5 else 9 if span>2 else 10 if span>1 else 12 if span>0.3 else 13 if span>0.1 else 14
+                self._zoom_level[0] = z; self.map_widget.set_zoom(z)
+            elif kind == "point":
+                _, lat, lon, zoom = self._pending_center
+                self.map_widget.set_position(lat, lon)
+                self._zoom_level[0] = zoom; self.map_widget.set_zoom(zoom)
+            self._pending_center = None
 
     def _get_visible_indices(self):
         base = sorted(list(self.filtered_indices)) if self.filtered_indices is not None \
@@ -538,6 +547,10 @@ class IronApp:
     def apply_focus(self):
         try:
             self.focus_range = (int(self.foc_min_e.get()), int(self.foc_max_e.get()))
+            first_idx = self.focus_range[0]
+            if 0 <= first_idx < len(self.points):
+                p = self.points[first_idx]
+                self._pending_center = ("point", p[0], p[1], 15)
             self._set_status(f"Focus: {self.focus_range[0]} → {self.focus_range[1]}")
             self.refresh_map_and_tree()
         except: pass
@@ -574,6 +587,8 @@ class IronApp:
             self.points[i] = (lat, lon, self.points[i][2])
         self._mark_dirty()
         self._set_status(f"Averaged {i1-i0-1} points ({mode}).")
+        p = self.points[i0]
+        self._pending_center = ("point", p[0], p[1], 15)
         self.refresh_map_and_tree()
 
     def bulk_delete_filtered(self):
@@ -604,6 +619,31 @@ class IronApp:
         idx = int(self.tree.item(sel[0], "values")[0])
         self.map_widget.set_position(self.points[idx][0], self.points[idx][1])
         self.map_widget.set_zoom(15); self._zoom_level[0] = 15
+
+    def _on_map_click(self, coords):
+        """Find the closest visible point to the clicked map position,
+        select it in the tree and center the map on it."""
+        if not self.points: return
+        click_lat, click_lon = coords
+        visible = self._get_visible_indices()
+        if not visible: return
+
+        best_idx = min(visible,
+                       key=lambda i: haversine(click_lat, click_lon,
+                                               self.points[i][0], self.points[i][1]))
+
+        # find and select the matching tree row
+        for item in self.tree.get_children():
+            if int(self.tree.item(item, "values")[0]) == best_idx:
+                self.tree.selection_set(item)
+                self.tree.focus(item)
+                self.tree.see(item)
+                break
+
+        # center map on the found point (no refresh — just reposition)
+        p = self.points[best_idx]
+        self.map_widget.set_position(p[0], p[1])
+        self._set_status(f"Closest point: #{best_idx}  ({p[0]:.7f}, {p[1]:.7f})")
 
     def _on_tree_double_click(self, event):
         item = self.tree.identify_row(event.y)
