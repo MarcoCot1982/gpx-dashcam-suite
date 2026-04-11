@@ -1,4 +1,4 @@
-# 🗺️ GPX Dashcam Suite
+# 🗺️ GPX Dashcam Suite / GPX editor
 
 A collection of five desktop tools that form a complete pipeline for turning raw dashcam footage into richly annotated, geocoded video overlays.
 
@@ -18,7 +18,8 @@ Dashcam video
 [2] GPX Ironer           Fix OCR errors manually with a "human in the loop" map editor
      │
      ▼
-[3] GPX Geocoder         Reverse-geocode each point (road + town) and store in local cache
+[3] GPX Geocoder         Turns coordinates into local addresses (e.g. "43.75185 7.43785" ➜ "Boulevard d'Italie, Monaco"
+                         Reverse-geocode each point (road + town) and store in local cache
      │
      ▼
 [4] Cache Editor         Review and correct any geocoding errors in the SQLite cache
@@ -55,8 +56,11 @@ A "human-in-the-loop" GPX editor for fixing OCR artefacts and GPS noise. Display
 - Interactive `tkintermapview` map with multi-segment colour coding
 - Rogue point detection (configurable distance/speed thresholds)
 - Click-to-select and bulk delete of bad points
+- Drag and drop live track edition
 - Full undo history
+- Time gap manual edition (in case a gps signal loss is not reflected in time)
 - Auto-save to a `_temp` file every 10 minutes
+- Auto-save a backup of the original file in case rollback is needed
 - Export cleaned GPX
 
 <img width="1759" height="934" alt="image" src="https://github.com/user-attachments/assets/67130587-82bc-4901-928c-2659fa4d3559" />
@@ -78,7 +82,7 @@ Takes a clean GPX file and enriches each track point with a human-readable locat
 **Key features**
 - 4-decimal-degree cache key (≈ 11 m grid) — shared with Cache Editor
 - Country-specific road normalisation (French RN/D routes, Italian SP/SS, etc.)
-- France-specific logic: `city` field excluded, postcode-based province derivation
+- France-specific logic: postcode-based province (départements) derivation
 - Monaco, Andorra and San Marino boundary aware
 - Pause / Stop & Save / Resume controls
 - Live map with last 200 geocoded points
@@ -96,6 +100,7 @@ A full GUI editor for the SQLite geocode cache produced by GPX Geocoder. Lets yo
 - WAL-mode SQLite with separate read/write connections (no locking)
 - Interactive map with configurable marker density
 - Rectangle area selection (4-click) for bulk editing
+- Visual (color coded) highlight of the selected part of track
 - Manual start/end index range selection
 - One-click re-geocode: deletes the stale `_geocoded.gpx` and relaunches GPX Geocoder
 - Fullscreen by default
@@ -111,9 +116,10 @@ Reads a geocoded GPX file and renders a black MP4 video that displays the road n
 **Key features**
 - Configurable resolution: 480p / 720p / 1080p
 - Frame rates: 24 / 30 / 60 fps
-- Country flag images from a local `flags/` folder (PNG, named by ISO 3166-1 alpha-2 code)
-- Unicode flag emoji fallback when PNG not found
+- Country flag images from a local `flags/` folder (PNG, named by ISO 3166-1 alpha-2 code) to workaround Windows limitation
 - Font size, colour and background customisable from UI
+- Transparent background option available
+- Capability to create both opaque and transparent background outputs at once
 - Live map showing full track + current-point marker during render
 - Render progress bar with ETA
 
