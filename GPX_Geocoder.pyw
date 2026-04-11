@@ -77,6 +77,56 @@ C = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# APP ICON  (GPS pin — amber teardrop + white dot, 16/32/48/64 px, embedded ICO)
+# ──────────────────────────────────────────────────────────────────────────────
+import base64, tempfile
+
+_ICO_B64 = (
+    "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"
+)
+
+def _apply_icon(win):
+    """Write the embedded ICO to a temp file and apply it via iconbitmap (Windows-safe)."""
+    try:
+        data = base64.b64decode(_ICO_B64)
+        with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as tf:
+            tf.write(data)
+            _ico_path = tf.name
+        win.iconbitmap(_ico_path)
+    except Exception:
+        pass   # silently ignore on platforms that don't support ICO
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Italian capoluoghi and translations
 # ──────────────────────────────────────────────────────────────────────────────
 _RAW_CAPOLUOGHI = [
@@ -376,6 +426,7 @@ ensure_cache_db(CACHE_DB_PATH)
 db_conn = sqlite3.connect(CACHE_DB_PATH, check_same_thread=False)
 
 root = tk.Tk()
+_apply_icon(root)
 root.title(f"GPX Geocoder  {VERSION}")
 root.configure(bg=C["bg"])
 try:    root.state("zoomed")
@@ -404,11 +455,11 @@ def show_splash_then_main():
     w, h   = 620, 300; sp.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x")
     body = tk.Frame(sp, bg=C["bg"]); body.pack(expand=True, fill="both", padx=40)
-    tk.Label(body, text="GPX GEOCODER",
+    tk.Label(body, text="GPX REVERSE GEOCODER",
              font=("Consolas",22,"bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(28,4))
     tk.Label(body, text=f"{VERSION}  ·  by {AUTHOR}  ·  {datetime.now().year}",
              font=("Consolas",9), bg=C["bg"], fg=C["muted"]).pack()
-    tk.Label(body, text="reverse geocode trackpoints · cache everything",
+    tk.Label(body, text="Name your roads - Gotta cache 'em all!",
              font=("Consolas",9,"italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4,16))
     pbv = tk.DoubleVar()
     pb  = ttk.Progressbar(body, variable=pbv, maximum=100, length=540); pb.pack()
@@ -806,14 +857,14 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
         elapsed  = time.time() - t_start
         per_pt   = elapsed / geocoded if geocoded else 0
         remain   = (total - i - 1) * per_pt
-        eta_str  = f"ETA {int(remain//60)}m{int(remain%60):02d}s" if remain > 0 else ""
+        eta_str  = f"ETA {int(remain//60)}:{int(remain%60):02d}" if remain > 0 else ""
 
         # progress
         pct = ((i + 1) / total) * 100
         try:
             progress_var.set(pct)
             eta_label.config(text=eta_str)
-            point_counter_label.config(text=f"{i+1:,}  /  {total:,}  pts")
+            point_counter_label.config(text=f"{i+1:,} / {total:,} pts".replace(',', '.'))
             file_counter_label.config(text=f"file  {file_idx}  /  {total_files}")
         except Exception: pass
 

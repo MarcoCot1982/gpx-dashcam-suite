@@ -1,5 +1,7 @@
 import os
 import re
+import io
+import base64
 import time
 import threading
 import cv2
@@ -8,7 +10,7 @@ import pytesseract
 from datetime import datetime, timedelta
 from tkinter import Tk, Frame, Label, Button, Entry, StringVar, ttk, scrolledtext, filedialog
 import tkinter as tk
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 from staticmap import StaticMap, CircleMarker
 
 # ---------------- CONFIG ----------------
@@ -20,6 +22,70 @@ TESS_PSMS = [7, 6]
 FLOAT5_RE      = re.compile(r'(-?\d{1,3}\.\d{5})')
 FLOAT_LOOSE_RE = re.compile(r'(-?\d{1,3}\.\d{4,5})')
 FLOAT_GENERIC_RE = re.compile(r'(-?\d+\.\d+)')
+
+# ──────────────────────────────────────────────────────────────────────────────
+# WINDOW ICON  (GPS pin + film-strip holes, embedded as base64 — no .ico file)
+# ──────────────────────────────────────────────────────────────────────────────
+def _make_icon_image(size):
+    """Draw a GPS map-pin with film-strip sprocket holes in the app's orange."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d   = ImageDraw.Draw(img)
+    s   = size
+    pin_cx    = s // 2
+    pin_top   = int(s * 0.04)
+    pin_r     = int(s * 0.36)
+    circle_bot = pin_top + pin_r * 2
+    pin_tip   = int(s * 0.93)
+    inner_cy  = pin_top + pin_r
+
+    # Shadow
+    sc = (120, 60, 0, 140)
+    d.ellipse([pin_cx-pin_r+2, pin_top+2, pin_cx+pin_r+2, circle_bot+2], fill=sc)
+    d.polygon([(pin_cx-pin_r//2+2, circle_bot+1),
+               (pin_cx+pin_r//2+2, circle_bot+1),
+               (pin_cx+2, pin_tip+2)], fill=sc)
+
+    # Pin body — accent orange
+    orange = (245, 166, 35, 255)
+    d.ellipse([pin_cx-pin_r, pin_top, pin_cx+pin_r, circle_bot], fill=orange)
+    d.polygon([(pin_cx-pin_r//2, circle_bot-1),
+               (pin_cx+pin_r//2, circle_bot-1),
+               (pin_cx, pin_tip)], fill=orange)
+    d.ellipse([pin_cx-pin_r, pin_top, pin_cx+pin_r, circle_bot],
+              outline=(180, 110, 0, 255), width=max(1, s//32))
+
+    # Film-strip sprocket holes (3 top + 3 bottom inside the circle)
+    hole_h = max(3, int(s * 0.09))
+    hole_w = max(2, int(s * 0.06))
+    gap    = max(2, int(s * 0.06))
+    strip_w = 3*hole_w + 2*gap
+    sx     = pin_cx - strip_w // 2
+    voff   = max(1, s // 20)
+    hc     = (30, 15, 0, 255)
+    for i in range(3):
+        hx = sx + i * (hole_w + gap)
+        d.rectangle([hx, inner_cy-hole_h-voff, hx+hole_w, inner_cy-voff], fill=hc)
+        d.rectangle([hx, inner_cy+voff,        hx+hole_w, inner_cy+hole_h+voff], fill=hc)
+
+    # White centre dot ("you are here")
+    dr = max(2, int(s * 0.11))
+    d.ellipse([pin_cx-dr, inner_cy-dr, pin_cx+dr, inner_cy+dr],
+              fill=(255, 255, 255, 235))
+    return img
+
+def _build_app_icon():
+    """Return a list of PIL images suitable for root.iconphoto()."""
+    return [_make_icon_image(sz) for sz in (16, 24, 32, 48)]
+
+def apply_window_icon(root):
+    """Attach the embedded icon to a Tk root window (works on Windows & Linux)."""
+    try:
+        images  = _build_app_icon()
+        tk_imgs = [ImageTk.PhotoImage(im) for im in images]
+        root._icon_refs = tk_imgs          # keep references alive
+        root.iconphoto(True, *tk_imgs)
+    except Exception:
+        pass   # never crash on icon failure
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PALETTE  (shared with GPX Ironer / Geocoder / Cache Editor)
@@ -179,6 +245,7 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(f"DashcamToGPX  {VERSION}")
+        apply_window_icon(root)
         root.configure(bg=C["bg"])
         root.geometry("1400x900")
         root.resizable(True, True)

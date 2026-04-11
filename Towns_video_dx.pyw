@@ -563,6 +563,61 @@ try: root.state("zoomed")
 except: root.geometry("1440x860")
 root.resizable(True,True)
 
+# ── Window icon: GPS pin + film strip, drawn with PIL at runtime ──────────────
+def _make_app_icon(size=64):
+    """Draw a location pin (amber) with a small film-strip cutout. Returns ImageTk."""
+    from PIL import Image, ImageDraw
+    S = size
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    amber  = (245, 166, 35, 255)
+    dark   = (20,  20,  20, 255)
+    white  = (232, 232, 232, 220)
+
+    # ── pin body: rounded teardrop ────────────────────────────────────────────
+    # circle (head of pin)
+    cr = int(S * 0.38)          # circle radius
+    cx, cy = S // 2, int(S * 0.38)
+    d.ellipse([cx-cr, cy-cr, cx+cr, cy+cr], fill=amber)
+
+    # triangle tail pointing down
+    tip_y = int(S * 0.93)
+    d.polygon([(cx - int(cr*0.55), cy + int(cr*0.60)),
+               (cx + int(cr*0.55), cy + int(cr*0.60)),
+               (cx,                tip_y)],
+              fill=amber)
+
+    # ── inner circle (dark cutout) ────────────────────────────────────────────
+    ir = int(cr * 0.52)
+    d.ellipse([cx-ir, cy-ir, cx+ir, cy+ir], fill=dark)
+
+    # ── tiny film-strip inside the inner circle ───────────────────────────────
+    # three small white rectangles side by side
+    fw = int(ir * 0.38)
+    fh = int(ir * 0.55)
+    gap = int(ir * 0.12)
+    total_w = 3 * fw + 2 * gap
+    fx0 = cx - total_w // 2
+    fy0 = cy - fh // 2
+    for k in range(3):
+        x = fx0 + k * (fw + gap)
+        d.rectangle([x, fy0, x + fw, fy0 + fh], fill=white)
+        # sprocket holes top & bottom
+        sh = max(2, int(fh * 0.12))
+        sw = max(2, int(fw * 0.35))
+        sx = x + (fw - sw) // 2
+        d.rectangle([sx, fy0 - sh - 1, sx + sw, fy0 - 1],           fill=white)
+        d.rectangle([sx, fy0 + fh + 1, sx + sw, fy0 + fh + 1 + sh], fill=white)
+
+    return ImageTk.PhotoImage(img)
+
+try:
+    _icon = _make_app_icon(64)
+    root.iconphoto(True, _icon)
+except Exception:
+    pass   # silently skip if PIL isn't available or icon fails
+
 sty=ttk.Style(root); sty.theme_use("clam")
 sty.configure(".",background=C["bg"],foreground=C["text"])
 sty.configure("TLabel",background=C["bg"],foreground=C["text"],font=("Consolas",9))
@@ -832,6 +887,8 @@ def clear_map():
         map_marker_obj[0]=None
     map_all_coords.clear(); _last_pt[0]=-1
 
+_first_track_loaded = [False]
+
 def draw_full_track(coords):
     clear_map(); map_all_coords.extend(coords)
     if len(coords)>1:
@@ -840,9 +897,14 @@ def draw_full_track(coords):
     if coords:
         lats=[c[0] for c in coords]; lons=[c[1] for c in coords]
         clat=(min(lats)+max(lats))/2; clon=(min(lons)+max(lons))/2
-        span=max(max(lats)-min(lats),max(lons)-min(lons))
-        z=7 if span>5 else 9 if span>2 else 10 if span>1 else 12 if span>0.3 else 13 if span>0.1 else 14
-        current_zoom[0]=z; map_widget.set_position(clat,clon); map_widget.set_zoom(z)
+        if not _first_track_loaded[0]:
+            # First file: auto-fit zoom to track extent
+            span=max(max(lats)-min(lats),max(lons)-min(lons))
+            z=7 if span>5 else 9 if span>2 else 10 if span>1 else 12 if span>0.3 else 13 if span>0.1 else 14
+            current_zoom[0]=z
+            _first_track_loaded[0]=True
+        # Always re-center on the new track, but keep current zoom level
+        map_widget.set_position(clat,clon); map_widget.set_zoom(current_zoom[0])
 
 def update_marker(lat,lon):
     if map_marker_obj[0]:
