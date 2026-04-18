@@ -12,6 +12,9 @@ Built with Python + Tkinter. Dark cinematic UI throughout. Designed for Windows,
 Dashcam video
      │
      ▼
+[0] Landing menu
+     │
+     ▼
 [1] Video → GPX          Extract GPS coordinates from on-screen OSD via OCR
      │
      ▼
@@ -32,6 +35,14 @@ Dashcam video
 ---
 
 ## 📦 Tools
+
+### START · Landing menu  `GPX_Suite_Launcher.pyw`
+
+Interactive menu where the user can choose the app to run, or follow the pipeline
+
+<img width="1141" height="1007" alt="MENU" src="https://github.com/user-attachments/assets/d6d1b603-4f56-42de-8333-d401b03780b2" />
+
+---
 
 ### 1 · Video → GPX  `video_to_gpx_v36_0_autosave_60s.pyw`
 
@@ -162,7 +173,8 @@ python Towns_video_dx.pyw
 
 ```
 gpx-dashcam-suite/
-├── video_to_gpx_v36_0_autosave_60s.pyw   # Step 1 – OCR GPS extractor
+├── GPX_Suite_Launcher.pyw                  # Step 0 – Menu - launcher
+├── video_to_gpx_v36_0_autosave_60s.pyw     # Step 1 – OCR GPS extractor
 ├── GPX_ironer.pyw                          # Step 2 – GPX manual cleaner
 ├── GPX_Geocoder.pyw                        # Step 3 – Reverse geocoder
 ├── Cache_Editor.pyw                        # Step 4 – Cache database editor
