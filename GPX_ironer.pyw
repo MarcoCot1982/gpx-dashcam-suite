@@ -8,8 +8,9 @@ Contact: marcocot1982@gmail.com
 Dark cinematic UI. Auto-saves a _temp file every 10 minutes after changes.
 """
 
-import os, math, time
+import os, math, time, threading
 from datetime import datetime, timedelta
+import requests
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -262,15 +263,13 @@ class IronApp:
                                       font=("Consolas",7), bg=C["panel"], fg=C["dim"])
         self.autosave_lbl.pack(padx=10, anchor="w")
 
-        self._sec_hdr(left, "IRON & BRIDGE")
+        self._sec_hdr(left, "SELF-CORRECT")
         ib = tk.Frame(left, bg=C["panel"]); ib.pack(fill="x", padx=10, pady=6)
         r1 = tk.Frame(ib, bg=C["panel"]); r1.pack(fill="x", pady=2)
         self._lbl_entry(r1, "Iron KPH",   self.max_kph_iron,   width=6)
         self._lbl_entry(r1, "Bridge KPH", self.max_kph_bridge, width=6)
-        # Auto-Iron + Bridge: half width each
         r2 = tk.Frame(ib, bg=C["panel"]); r2.pack(fill="x", pady=4)
-        self._mk_btn(r2, "⚙  Auto-Iron", C["orange"], self.auto_iron).pack(side="left", expand=True, fill="x", padx=(0,2))
-        self._mk_btn(r2, "🌉  Bridge",   C["blue"],   self.bridge_logic).pack(side="left", expand=True, fill="x", padx=(2,0))
+        self._mk_btn(r2, "⚙  Self-Correct", C["orange"], self.self_correct).pack(fill="x")
 
         self._sec_hdr(left, "VISUAL")
         vs = tk.Frame(left, bg=C["panel"]); vs.pack(fill="x", padx=10, pady=6)
@@ -290,17 +289,33 @@ class IronApp:
 
         self._sec_hdr(left, "FILTER")
         fl = tk.Frame(left, bg=C["panel"]); fl.pack(fill="x", padx=10, pady=6)
-        fl1 = tk.Frame(fl, bg=C["panel"]); fl1.pack(fill="x")
-        self.idx_min_e = self._lbl_entry(fl1, "Idx ≥", None, width=6)
-        self.idx_max_e = self._lbl_entry(fl1, "Idx ≤", None, width=6)
-        fl2 = tk.Frame(fl, bg=C["panel"]); fl2.pack(fill="x", pady=2)
-        self.lat_min_e = self._lbl_entry(fl2, "Lat ≥", None, width=8)
-        self.lat_max_e = self._lbl_entry(fl2, "Lat ≤", None, width=8)
-        fl3 = tk.Frame(fl, bg=C["panel"]); fl3.pack(fill="x", pady=2)
-        self.lon_min_e = self._lbl_entry(fl3, "Lon ≥", None, width=8)
-        self.lon_max_e = self._lbl_entry(fl3, "Lon ≤", None, width=8)
-        # Apply Filter + Clear: half width each
-        fl4 = tk.Frame(fl, bg=C["panel"]); fl4.pack(fill="x", pady=(4,0))
+
+        # Grid layout: all rows share the same 4 columns → perfectly aligned
+        fl.grid_columnconfigure(1, weight=1)
+        fl.grid_columnconfigure(3, weight=1)
+        _lkw = dict(font=("Consolas",8), bg=C["panel"], fg=C["muted"])
+        _ekw = dict(bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
+                    relief="flat", highlightthickness=1,
+                    highlightcolor=C["accent"], highlightbackground=C["border"],
+                    font=("Consolas",9))
+
+        tk.Label(fl, text="Idx ≥", **_lkw).grid(row=0, column=0, sticky="w", padx=(0,4), pady=2)
+        self.idx_min_e = tk.Entry(fl, width=8, **_ekw); self.idx_min_e.grid(row=0, column=1, sticky="ew", padx=(0,8), pady=2)
+        tk.Label(fl, text="Idx ≤", **_lkw).grid(row=0, column=2, sticky="w", padx=(0,4), pady=2)
+        self.idx_max_e = tk.Entry(fl, width=8, **_ekw); self.idx_max_e.grid(row=0, column=3, sticky="ew", pady=2)
+
+        tk.Label(fl, text="Lat ≥", **_lkw).grid(row=1, column=0, sticky="w", padx=(0,4), pady=2)
+        self.lat_min_e = tk.Entry(fl, width=8, **_ekw); self.lat_min_e.grid(row=1, column=1, sticky="ew", padx=(0,8), pady=2)
+        tk.Label(fl, text="Lat ≤", **_lkw).grid(row=1, column=2, sticky="w", padx=(0,4), pady=2)
+        self.lat_max_e = tk.Entry(fl, width=8, **_ekw); self.lat_max_e.grid(row=1, column=3, sticky="ew", pady=2)
+
+        tk.Label(fl, text="Lon ≥", **_lkw).grid(row=2, column=0, sticky="w", padx=(0,4), pady=2)
+        self.lon_min_e = tk.Entry(fl, width=8, **_ekw); self.lon_min_e.grid(row=2, column=1, sticky="ew", padx=(0,8), pady=2)
+        tk.Label(fl, text="Lon ≤", **_lkw).grid(row=2, column=2, sticky="w", padx=(0,4), pady=2)
+        self.lon_max_e = tk.Entry(fl, width=8, **_ekw); self.lon_max_e.grid(row=2, column=3, sticky="ew", pady=2)
+
+        # Apply Filter + Clear: half width each — back to pack in a separate frame
+        fl4 = tk.Frame(fl, bg=C["panel"]); fl4.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6,0))
         self._mk_btn(fl4, "Apply Filter", C["blue"], self.apply_filter).pack(side="left", expand=True, fill="x", padx=(0,2))
         self._mk_btn(fl4, "Clear",        C["dim"],  self.clear_filter).pack(side="left", expand=True, fill="x", padx=(2,0))
 
@@ -311,8 +326,8 @@ class IronApp:
         self._mk_btn(ba1, "🗑  Delete Filtered", C["red"], self.bulk_delete_filtered).pack(fill="x")
         # Set Int Lat + Set Int Lon: half width each
         ba2 = tk.Frame(ba, bg=C["panel"]); ba2.pack(fill="x", pady=2)
-        self._mk_btn(ba2, "Set Int Lat", C["orange"], lambda: self.bulk_set_integer("lat")).pack(side="left", expand=True, fill="x", padx=(0,2))
-        self._mk_btn(ba2, "Set Int Lon", C["orange"], lambda: self.bulk_set_integer("lon")).pack(side="left", expand=True, fill="x", padx=(2,0))
+        self._mk_btn(ba2, "Lat degrees", C["orange"], lambda: self.bulk_set_integer("lat")).pack(side="left", expand=True, fill="x", padx=(0,2))
+        self._mk_btn(ba2, "Lon degrees", C["orange"], lambda: self.bulk_set_integer("lon")).pack(side="left", expand=True, fill="x", padx=(2,0))
         # Avg ALL + Avg LAT + Avg LON: one third each
         ba3 = tk.Frame(ba, bg=C["panel"])
         ba3.pack(fill="x", pady=2)
@@ -331,6 +346,14 @@ class IronApp:
         # Edit Gap: full width
         ba5 = tk.Frame(ba, bg=C["panel"]); ba5.pack(fill="x", pady=2)
         self._mk_btn(ba5, "✂  Edit Gap", C["blue"], self.edit_gap).pack(fill="x")
+
+        self._sec_hdr(left, "FINALISE")
+        fn = tk.Frame(left, bg=C["panel"]); fn.pack(fill="x", padx=10, pady=6)
+        self._ele_btn = self._mk_btn(fn, "⛰  Add Altitude (DEM)", C["green"], self.add_elevation)
+        self._ele_btn.pack(fill="x", pady=2)
+        tk.Label(fn, text="Fetches SRTM 30m elevation for every\npoint · saves as _ele.gpx",
+                 font=("Consolas",7), bg=C["panel"], fg=C["dim"],
+                 justify="left").pack(anchor="w", padx=2)
 
         # Force scrollregion update after layout is fully resolved
         self.root.after(200, lambda: self._left_canvas.configure(
@@ -658,7 +681,38 @@ class IronApp:
         self._mark_dirty()
         self.refresh_map_and_tree()
 
-    # ── VIEW ───────────────────────────────────────────────────────────────────
+    def self_correct(self):
+        """Run auto-iron then bridge in sequence with a single undo snapshot."""
+        if not self.points: return
+        self._push_undo()
+        # ── iron pass ─────────────────────────────────────────────────────────
+        try: iron_t = float(self.max_kph_iron.get())
+        except: iron_t = 5000.0
+        cleaned = list(self.points); iron_count = 0
+        for i in range(1, len(cleaned)):
+            if speed_kph_between(cleaned[i-1], cleaned[i]) > iron_t:
+                cleaned[i] = (splice_decimals(cleaned[i-1][0], cleaned[i][0]),
+                              splice_decimals(cleaned[i-1][1], cleaned[i][1]),
+                              cleaned[i][2])
+                iron_count += 1
+        self.points = cleaned
+        # ── bridge pass ───────────────────────────────────────────────────────
+        try: bridge_t = float(self.max_kph_bridge.get())
+        except: bridge_t = 200.0
+        new_pts = list(self.points); bridge_count = 0
+        for i in range(1, len(new_pts)-1):
+            s1 = speed_kph_between(new_pts[i-1], new_pts[i])
+            s2 = speed_kph_between(new_pts[i],   new_pts[i+1])
+            if s1 > bridge_t and s2 > bridge_t:
+                if speed_kph_between(new_pts[i-1], new_pts[i+1]) < bridge_t:
+                    new_pts[i] = ((new_pts[i-1][0]+new_pts[i+1][0])/2,
+                                  (new_pts[i-1][1]+new_pts[i+1][1])/2,
+                                  new_pts[i][2])
+                    bridge_count += 1
+        self.points = new_pts
+        self._mark_dirty()
+        self._set_status(f"Self-correct: {iron_count} ironed, {bridge_count} bridged.")
+        self.refresh_map_and_tree()
     def refresh_map_and_tree(self):
         # Sync zoom from widget — catches scroll-wheel zoom that bypasses our buttons
         try:
@@ -935,6 +989,92 @@ class IronApp:
         d.bind("<Return>", lambda e: _apply())
         d.bind("<Escape>", lambda e: d.destroy())
         d.grab_set()
+
+    # ── ADD ELEVATION ──────────────────────────────────────────────────────────
+    def add_elevation(self):
+        if not self.points:
+            messagebox.showwarning("No data", "Load a GPX file first."); return
+        if not self.source_path:
+            messagebox.showwarning("No file", "No source file path known."); return
+
+        total = len(self.points)
+        if not messagebox.askyesno("Add Altitude",
+            f"Fetch SRTM 30m elevation for {total:,} points?\n\n"
+            f"This calls api.opentopodata.org in batches of 100.\n"
+            f"Estimated time: ~{max(1, total//100)} second(s).\n\n"
+            f"Output will be saved as _ele.gpx in the same folder."):
+            return
+
+        self._ele_btn.config(state="disabled", text="⏳  Fetching…")
+
+        def _worker():
+            BATCH   = 100
+            DELAY   = 1.1          # seconds between requests (rate-limit: 1/s)
+            URL     = "https://api.opentopodata.org/v1/srtm30m"
+            elevs   = [None] * total
+            errors  = 0
+
+            for start in range(0, total, BATCH):
+                batch = self.points[start:start + BATCH]
+                locs  = "|".join(f"{p[0]},{p[1]}" for p in batch)
+                batch_n = start // BATCH + 1
+                total_batches = (total + BATCH - 1) // BATCH
+                pct = int(start / total * 100)
+                self.root.after(0, lambda s=start, tb=total_batches, bn=batch_n, pc=pct:
+                    self._set_status(
+                        f"Elevation batch {bn}/{tb}  ·  {pc}%  ·  {s:,}/{total:,} pts"))
+
+                try:
+                    r = requests.get(URL, params={"locations": locs}, timeout=15)
+                    r.raise_for_status()
+                    for j, result in enumerate(r.json().get("results", [])):
+                        elevs[start + j] = result.get("elevation")
+                except Exception as e:
+                    errors += 1
+                    self.root.after(0, lambda err=str(e):
+                        self._set_status(f"⚠ Batch error: {err}"))
+
+                if start + BATCH < total:
+                    time.sleep(DELAY)
+
+            # Build and save GPX with elevation
+            stem, ext = os.path.splitext(self.source_path)
+            # strip existing _ele suffix to avoid doubling
+            if stem.endswith("_ele"): stem = stem[:-4]
+            out_path = stem + "_ele" + ext
+
+            try:
+                gpx_out = gpxpy.gpx.GPX()
+                trk     = gpxpy.gpx.GPXTrack(); gpx_out.tracks.append(trk)
+                seg     = gpxpy.gpx.GPXTrackSegment(); trk.segments.append(seg)
+                for i, (lat, lon, t) in enumerate(self.points):
+                    pt = gpxpy.gpx.GPXTrackPoint(lat, lon, time=t)
+                    if elevs[i] is not None:
+                        pt.elevation = elevs[i]
+                    seg.points.append(pt)
+                with open(out_path, "w", encoding="utf-8") as fh:
+                    fh.write(gpx_out.to_xml())
+
+                filled  = sum(1 for e in elevs if e is not None)
+                missing = total - filled
+                msg = (f"Elevation added: {filled:,}/{total:,} points.\n"
+                       f"{'No errors.' if errors == 0 else f'{errors} batch error(s).'}\n"
+                       f"{'All points have elevation.' if missing == 0 else f'{missing} point(s) missing elevation.'}\n\n"
+                       f"Saved → {os.path.basename(out_path)}")
+                self.root.after(0, lambda m=msg, p=out_path: [
+                    self._set_status(f"✅ Saved → {os.path.basename(p)}"),
+                    messagebox.showinfo("Elevation done", m)
+                ])
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): [
+                    self._set_status(f"❌ Save failed: {err}"),
+                    messagebox.showerror("Save error", f"Could not save file:\n{err}")
+                ])
+
+            self.root.after(0, lambda: self._ele_btn.config(
+                state="normal", text="⛰  Add Altitude (DEM)"))
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     # ── TREE INTERACTION ───────────────────────────────────────────────────────
     def center_on_selected(self):

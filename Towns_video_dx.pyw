@@ -1014,7 +1014,7 @@ def pump_ui_queue():
                     if idx>=0: update_marker(*map_all_coords[idx])
                     _last_pt[0]=abs_pt
             elif cmd=="overall":
-                done,total=args; pct=int(done/total*100) if total else 0
+                pct=args[0]
                 overall_pb["value"]=pct; overall_pct.config(text=f"{pct:3d}%")
             elif cmd=="file_start":
                 fp,idx,total,coords=args; name=os.path.basename(fp)
@@ -1036,65 +1036,106 @@ def pump_ui_queue():
 
 root.after(80,pump_ui_queue)
 
-def render_thread(targets,settings):
-    total=len(targets); done=0; n_ok=0; n_err=0
-    def pcb(cf,tf,eta,abs_pt,tp,cmt,ts,use_fl): ui_queue.put(("progress",cf,tf,eta,abs_pt,tp,cmt,ts,use_fl))
-    def lcb(msg,tag=""): ui_queue.put(("log",msg,tag))
-    start_point=settings.pop("start_point",0)
-    for idx,fp in enumerate(targets,start=1):
+def render_thread(targets, settings):
+    total_secs  = settings.pop("total_secs", 1.0)
+    fps         = settings["fps"]
+    is_dual     = settings.get("both", False)
+    done        = 0; n_ok = 0; n_err = 0
+    secs_before = 0.0   # cumulative seconds of fully-completed files
+
+    def lcb(msg, tag=""): ui_queue.put(("log", msg, tag))
+
+    def pcb(cf, tf, eta, abs_pt, tp, cmt, ts, use_fl):
+        ui_queue.put(("progress", cf, tf, eta, abs_pt, tp, cmt, ts, use_fl))
+        # Live overall: seconds completed so far across all files
+        file_secs = cf / fps if fps else 0
+        overall_done = secs_before + file_secs
+        pct = int(min(overall_done / total_secs * 100, 100)) if total_secs > 0 else 0
+        ui_queue.put(("overall", pct))
+
+    start_point = settings.pop("start_point", 0)
+    for idx, fp in enumerate(targets, start=1):
         if stop_event.is_set(): break
-        try: coords=extract_all_coords(fp)
-        except: coords=[]
-        ui_queue.put(("file_start",fp,idx,total,coords))
-        lcb(f"── File {idx}/{total}:  {os.path.basename(fp)}","info")
-        if start_point>0: lcb(f"   Starting from point {start_point}","info")
+        try: coords = extract_all_coords(fp)
+        except: coords = []
+        ui_queue.put(("file_start", fp, idx, len(targets), coords))
+        lcb(f"── File {idx}/{len(targets)}:  {os.path.basename(fp)}", "info")
+        if start_point > 0: lcb(f"   Starting from point {start_point}", "info")
+        file_secs = 0.0
         try:
-            comments=extract_comments(fp)
-            if not comments: lcb("⚠  No comments — skipped.","err"); file_status[fp]="skipped"; ui_queue.put(("file_done",fp,False)); done+=1; ui_queue.put(("overall",done,total)); continue
-            if start_point>=len(comments): lcb(f"⚠  Start point {start_point} ≥ total points {len(comments)} — skipped.","err"); ui_queue.put(("file_done",fp,False)); done+=1; ui_queue.put(("overall",done,total)); continue
-            durations=calculate_durations(comments)
-            out_folder=resolve_output_folder(fp)
-            if not out_folder: lcb("⚠  No output folder — skipped.","err"); ui_queue.put(("file_done",fp,False)); done+=1; ui_queue.put(("overall",done,total)); continue
-            stem=os.path.splitext(os.path.basename(fp))[0]
-            if settings.get("both", False):
+            comments = extract_comments(fp)
+            if not comments:
+                lcb("⚠  No comments — skipped.", "err"); file_status[fp] = "skipped"
+                ui_queue.put(("file_done", fp, False)); done += 1; continue
+            if start_point >= len(comments):
+                lcb(f"⚠  Start point {start_point} ≥ total points {len(comments)} — skipped.", "err")
+                ui_queue.put(("file_done", fp, False)); done += 1; continue
+            durations = calculate_durations(comments)
+            # effective duration of this file (respecting start_point)
+            cum = [0.0]
+            for d in durations[1:]: cum.append(cum[-1] + max(d, 0))
+            t_off = cum[start_point] if start_point < len(cum) else 0.0
+            file_secs = (cum[-1] - t_off) * (2 if is_dual else 1)
+
+            out_folder = resolve_output_folder(fp)
+            if not out_folder:
+                lcb("⚠  No output folder — skipped.", "err")
+                ui_queue.put(("file_done", fp, False)); done += 1; continue
+            stem = os.path.splitext(os.path.basename(fp))[0]
+            if is_dual:
                 opaque_path = os.path.join(out_folder, stem + ".mp4")
                 transp_path = os.path.join(out_folder, stem + ".webm")
-                ok,last_pt=generate_video_dual(comments,durations,opaque_path,transp_path,settings,pause_event,stop_event,pcb,lambda m,t="ok":lcb(m,t),start_point=start_point)
-                if ok:
-                    lcb(f"✅  Saved → {os.path.basename(opaque_path)} + {os.path.basename(transp_path)}","ok"); n_ok+=1
-                else:
-                    lcb(f"⏹  Stopped at point {last_pt} — partial files kept.","err"); n_err+=1
-                ui_queue.put(("file_done",fp,ok))
+                ok, last_pt = generate_video_dual(comments, durations, opaque_path, transp_path, settings,
+                                                  pause_event, stop_event, pcb,
+                                                  lambda m, t="ok": lcb(m, t), start_point=start_point)
+                if ok: lcb(f"✅  Saved → {os.path.basename(opaque_path)} + {os.path.basename(transp_path)}", "ok"); n_ok += 1
+                else:  lcb(f"⏹  Stopped at point {last_pt} — partial files kept.", "err"); n_err += 1
             else:
-                ext=".webm" if settings.get("transparent",False) else ".mp4"
-                out_path=os.path.join(out_folder,stem+ext)
-                ok,last_pt=generate_video(comments,durations,out_path,settings,pause_event,stop_event,pcb,lambda m,t="ok":lcb(m,t),start_point=start_point)
-                if ok:
-                    lcb(f"✅  Saved → {out_path}","ok"); n_ok+=1
-                else:
-                    lcb(f"⏹  Stopped at point {last_pt} — partial file kept.","err"); n_err+=1
-                ui_queue.put(("file_done",fp,ok))
-        except Exception as e: lcb(f"❌  Error: {e}","err"); ui_queue.put(("file_done",fp,False)); n_err+=1
-        done+=1; ui_queue.put(("overall",done,total))
+                ext = ".webm" if settings.get("transparent", False) else ".mp4"
+                out_path = os.path.join(out_folder, stem + ext)
+                ok, last_pt = generate_video(comments, durations, out_path, settings,
+                                             pause_event, stop_event, pcb,
+                                             lambda m, t="ok": lcb(m, t), start_point=start_point)
+                if ok: lcb(f"✅  Saved → {out_path}", "ok"); n_ok += 1
+                else:  lcb(f"⏹  Stopped at point {last_pt} — partial file kept.", "err"); n_err += 1
+            ui_queue.put(("file_done", fp, ok))
+        except Exception as e:
+            lcb(f"❌  Error: {e}", "err"); ui_queue.put(("file_done", fp, False)); n_err += 1
+        done += 1
+        secs_before += file_secs
         if stop_event.is_set(): break
-        start_point=0   # start_point only applies to the first file
+        start_point = 0
     if stop_event.is_set():
-        stop_event.clear(); ui_queue.put(("all_done","Render stopped."))
+        stop_event.clear(); ui_queue.put(("all_done", "Render stopped."))
     else:
-        msg=f"Render complete — {n_ok} succeeded, {n_err} failed."
-        lcb(msg,"ok"); ui_queue.put(("all_done",msg))
-    processing_state["running"]=False
+        msg = f"Render complete — {n_ok} succeeded, {n_err} failed."
+        lcb(msg, "ok"); ui_queue.put(("all_done", msg))
+    processing_state["running"] = False
 
 def start_rendering():
-    if processing_state["running"]: messagebox.showinfo("Busy","A render is already in progress."); return
-    targets=[fp for fp in file_list if file_status.get(fp) in ("pending","error")]
-    if not targets: messagebox.showwarning("Nothing to render","No pending files in the queue.\nAdd GPX files or clear completed ones."); return
+    if processing_state["running"]: messagebox.showinfo("Busy", "A render is already in progress."); return
+    targets = [fp for fp in file_list if file_status.get(fp) in ("pending", "error")]
+    if not targets: messagebox.showwarning("Nothing to render", "No pending files in the queue.\nAdd GPX files or clear completed ones."); return
+
+    # Pre-scan all files to compute total video duration for the overall bar
+    is_dual = both_var.get()
+    total_secs = 0.0
+    for fp in targets:
+        try:
+            cmts = extract_comments(fp)
+            if cmts:
+                durs = calculate_durations(cmts)
+                total_secs += sum(max(d, 0) for d in durs) * (2 if is_dual else 1)
+        except Exception:
+            pass
+    if total_secs <= 0: total_secs = 1.0  # guard against empty/unreadable files
     settings={"resolution":RESOLUTIONS.get(res_var.get(),(1280,720)),"fps":fps_var.get(),
               "bg_color":bg_color_var.get(),"text_color":txt_color_var.get(),
               "cmt_fontsize":cmt_size_var.get(),"time_fontsize":ts_size_var.get(),
               "text_align":align_var.get(),"use_flags":use_flags_var.get(),
               "transparent":transparent_var.get(),
               "both":both_var.get(),
+              "total_secs":total_secs,
               "start_point":max(0,int(start_point_var.get())) if start_point_var.get().strip().isdigit() else 0}
     stop_event.clear(); pause_event.set(); processing_state["running"]=True
     overall_pb["value"]=0; overall_pct.config(text="  0%"); pause_btn_ref[0].config(text="⏸  Pause")
