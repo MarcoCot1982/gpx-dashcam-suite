@@ -29,6 +29,9 @@ VERSION="v1.1"; AUTHOR="Marco Cot"; CONTACT="marcocot1982@gmail.com"; SPLASH_SEC
 # Suppress the ffmpeg console window on Windows; no-op on Linux/Mac
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Script directory — used to locate sibling tools like the overlay compositor
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 RESOLUTIONS={"854 × 480  (480p)":(854,480),"1280 × 720  (720p)":(1280,720),"1920 × 1080 (1080p)":(1920,1080)}
 FPS_OPTIONS=[24,30,60]
 
@@ -305,14 +308,17 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
     return clip, chunk_dur, None
 
 def generate_video(comments, durations, output_path, settings,
-                   pause_event, stop_event, progress_cb, log_cb, start_point=0):
+                   pause_event, stop_event, progress_cb, log_cb, start_point=0, end_point=None):
     cum_times = [0.0]
     for i in range(1, len(comments)):
         cum_times.append(cum_times[-1] + max(durations[i], 0))
 
     n_pts        = len(comments)
+    # Clamp to end_point if set — reaching it counts as a clean completion
+    if end_point is not None and 0 <= end_point < n_pts:
+        n_pts = end_point + 1
     t_offset     = cum_times[start_point] if start_point < n_pts else 0.0
-    eff_duration = cum_times[-1] - t_offset
+    eff_duration = cum_times[n_pts - 1] - t_offset
     if eff_duration <= 0:
         log_cb("⚠  No duration — skipped."); return False, start_point
 
@@ -654,6 +660,7 @@ use_flags_var=tk.BooleanVar(value=True)
 transparent_var=tk.BooleanVar(value=False)
 both_var=tk.BooleanVar(value=False)
 start_point_var=tk.StringVar(value="")
+end_point_var=tk.StringVar(value="")
 
 def show_splash():
     sp=tk.Toplevel(root); sp.overrideredirect(True); sp.configure(bg=C["bg"])
@@ -798,11 +805,25 @@ mk_btn(cr,"▶  Start Render",C["green"],lambda:start_rendering(),font=("Consola
 _pb2=mk_btn(cr,"⏸  Pause",C["orange"],lambda:toggle_pause(),font=("Consolas",9,"bold")); _pb2.pack(fill="x",pady=3); pause_btn_ref[0]=_pb2
 mk_btn(cr,"⏹  Stop",C["red"],lambda:request_stop(),font=("Consolas",9,"bold")).pack(fill="x",pady=3)
 
-# ── Start from point ──────────────────────────────────────────────────────────
-sp_row=tk.Frame(cr,bg=C["panel"]); sp_row.pack(fill="x",pady=(6,0))
-tk.Label(sp_row,text="Start from pt:",font=("Consolas",8),bg=C["panel"],fg=C["muted"]).pack(side="left")
-ttk.Entry(sp_row,textvariable=start_point_var,width=7,font=("Consolas",9)).pack(side="left",padx=6)
-tk.Label(sp_row,text="(blank=0)",font=("Consolas",7),bg=C["panel"],fg=C["dim"]).pack(side="left")
+# ── Start / End point entries ─────────────────────────────────────────────────
+def _mk_pt_entry(parent, label, var):
+    """Dark-styled point entry (tk.Entry, not ttk, so colors are controllable)."""
+    r=tk.Frame(parent,bg=C["panel"]); r.pack(fill="x",pady=(4,0))
+    tk.Label(r,text=label,font=("Consolas",8),bg=C["panel"],fg=C["muted"]).pack(side="left")
+    tk.Entry(r,textvariable=var,width=7,
+             bg=C["panel2"],fg=C["text"],insertbackground=C["text"],
+             relief="flat",highlightthickness=1,
+             highlightcolor=C["accent"],highlightbackground=C["border"],
+             font=("Consolas",9)).pack(side="left",padx=6)
+
+_mk_pt_entry(cr,"Start from pt:", start_point_var)
+_mk_pt_entry(cr,"End on pt:    ", end_point_var)
+tk.Label(cr,text="blank = not set   |   end pt saves & stops",
+         font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
+
+# ── Resume partial / Merge ────────────────────────────────────────────────────
+mk_btn(cr,"⏩  Resume Partial…",C["blue"],lambda:resume_partial(),font=("Consolas",8,"bold")).pack(fill="x",pady=(6,2))
+mk_btn(cr,"🔗  Merge 2 Videos…",C["panel2"],lambda:merge_two_videos(),font=("Consolas",8,"bold")).pack(fill="x",pady=2)
 
 # ── Flag toggle ───────────────────────────────────────────────────────────────
 flag_btn=[None]
@@ -970,6 +991,90 @@ def request_stop():
     if messagebox.askyesno("Stop","Stop rendering after the current frame?"):
         pause_event.set(); stop_event.set(); set_status("Stopping…"); log("⏹  Stop requested.","err")
 
+def _find_compositor():
+    """Return path to overlay_compositor.pyw if it exists alongside this script."""
+    for name in ("overlay_compositor.pyw", "Overlay_compositor.pyw",
+                 "overlay_compositor.py",  "Overlay_Compositor.pyw"):
+        p = os.path.join(SCRIPT_DIR, name)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def open_compositor_dialog(completed_files):
+    """Show completed output files and offer to open one in the Overlay Compositor."""
+    if not completed_files:
+        return
+
+    compositor = _find_compositor()
+
+    d = tk.Toplevel(root)
+    d.title("Render Complete")
+    d.configure(bg=C["bg"])
+    d.geometry("560x420")
+    d.grab_set()
+    d.resizable(False, True)
+
+    tk.Frame(d, bg=C["accent"], height=3).pack(fill="x")
+    tk.Label(d, text="RENDER COMPLETE",
+             font=("Consolas", 11, "bold"), bg=C["bg"], fg=C["accent"]).pack(
+             padx=16, pady=(14, 2), anchor="w")
+    tk.Label(d, text="Select a file to open in Overlay Compositor:",
+             font=("Consolas", 8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
+    tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=8)
+
+    lf = tk.Frame(d, bg=C["accent"], padx=1, pady=1)
+    lf.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+    li = tk.Frame(lf, bg=C["panel2"]); li.pack(fill="both", expand=True)
+    lsb = ttk.Scrollbar(li, orient="vertical"); lsb.pack(side="right", fill="y")
+    lb = tk.Listbox(li, yscrollcommand=lsb.set, font=("Consolas", 9),
+                    bg=C["panel2"], fg=C["text"],
+                    selectbackground=C["accent"], selectforeground="black",
+                    activestyle="none", relief="flat", borderwidth=0, selectmode="single")
+    lb.pack(fill="both", expand=True); lsb.config(command=lb.yview)
+    for fp in completed_files:
+        ext_icon = "🎞 " if fp.endswith(".webm") else "🎬 "
+        lb.insert(tk.END, f"  {ext_icon}{os.path.basename(fp)}")
+    lb.selection_set(0)
+
+    if compositor is None:
+        tk.Label(d,
+                 text="⚠  overlay_compositor.pyw not found in the same folder.\n"
+                      "   Locate it manually with the button below.",
+                 font=("Consolas", 7), bg=C["bg"], fg=C["orange"],
+                 justify="left").pack(padx=16, anchor="w", pady=(0, 4))
+
+    def _launch():
+        sel = lb.curselection()
+        if not sel:
+            messagebox.showwarning("No selection", "Please select a file.", parent=d); return
+        chosen    = completed_files[sel[0]]
+        comp_path = compositor
+        if comp_path is None:
+            comp_path = filedialog.askopenfilename(
+                title="Locate overlay_compositor.pyw",
+                filetypes=[("Python files", "*.py *.pyw")],
+                initialdir=SCRIPT_DIR, parent=d)
+            if not comp_path: return
+        try:
+            subprocess.Popen([sys.executable, comp_path, chosen], creationflags=_NO_WINDOW)
+            log(f"🗺  Opened in Overlay Compositor: {os.path.basename(chosen)}", "ok")
+            d.destroy()
+        except Exception as e:
+            messagebox.showerror("Launch error", f"Could not launch compositor:\n{e}", parent=d)
+
+    bf = tk.Frame(d, bg=C["bg"]); bf.pack(fill="x", padx=16, pady=(0, 14))
+    tk.Button(bf, text="🗺  Open in Overlay Compositor",
+              bg=C["blue"], fg="white", activebackground=C["blue"], activeforeground="white",
+              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
+              pady=6, padx=10, command=_launch).pack(side="left", padx=(0, 6))
+    tk.Button(bf, text="Close", bg=C["dim"], fg=C["muted"],
+              activebackground=C["dim"], activeforeground="white",
+              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
+              pady=6, padx=10, command=d.destroy).pack(side="left")
+    tk.Frame(d, bg=C["accent"], height=3).pack(fill="x", side="bottom")
+
+
 def pump_ui_queue():
     try:
         while True:
@@ -1026,11 +1131,16 @@ def pump_ui_queue():
             elif cmd=="log":
                 msg,tag=args; log(msg,tag)
             elif cmd=="all_done":
+                msg       = args[0]
+                completed = args[1] if len(args) > 1 else []
                 processing_state["running"]=False; pause_btn_ref[0].config(text="⏸  Pause")
                 overall_pb["value"]=100; overall_pct.config(text="100%")
                 current_pb["value"]=0; eta_lbl.config(text=""); file_info_lbl.config(text=""); point_lbl.config(text="")
-                set_status(args[0])
-                if "complete" in args[0].lower(): messagebox.showinfo("Done",args[0])
+                set_status(msg)
+                if completed:
+                    root.after(300, lambda c=completed: open_compositor_dialog(c))
+                elif "complete" in msg.lower():
+                    messagebox.showinfo("Done", msg)
     except queue.Empty: pass
     root.after(80,pump_ui_queue)
 
@@ -1041,7 +1151,9 @@ def render_thread(targets, settings):
     fps         = settings["fps"]
     is_dual     = settings.get("both", False)
     done        = 0; n_ok = 0; n_err = 0
-    secs_before = 0.0   # cumulative seconds of fully-completed files
+    secs_before = 0.0
+    end_point   = settings.pop("end_point", None)
+    completed_files = []   # accumulate successfully written output paths
 
     def lcb(msg, tag=""): ui_queue.put(("log", msg, tag))
 
@@ -1071,11 +1183,12 @@ def render_thread(targets, settings):
                 lcb(f"⚠  Start point {start_point} ≥ total points {len(comments)} — skipped.", "err")
                 ui_queue.put(("file_done", fp, False)); done += 1; continue
             durations = calculate_durations(comments)
-            # effective duration of this file (respecting start_point)
+            # effective duration respecting both start_point and end_point
             cum = [0.0]
             for d in durations[1:]: cum.append(cum[-1] + max(d, 0))
-            t_off = cum[start_point] if start_point < len(cum) else 0.0
-            file_secs = (cum[-1] - t_off) * (2 if is_dual else 1)
+            t_off     = cum[start_point] if start_point < len(cum) else 0.0
+            t_end_idx = min(end_point, len(cum)-1) if end_point is not None else len(cum)-1
+            file_secs = (cum[t_end_idx] - t_off) * (2 if is_dual else 1)
 
             out_folder = resolve_output_folder(fp)
             if not out_folder:
@@ -1088,15 +1201,20 @@ def render_thread(targets, settings):
                 ok, last_pt = generate_video_dual(comments, durations, opaque_path, transp_path, settings,
                                                   pause_event, stop_event, pcb,
                                                   lambda m, t="ok": lcb(m, t), start_point=start_point)
-                if ok: lcb(f"✅  Saved → {os.path.basename(opaque_path)} + {os.path.basename(transp_path)}", "ok"); n_ok += 1
+                if ok:
+                    lcb(f"✅  Saved → {os.path.basename(opaque_path)} + {os.path.basename(transp_path)}", "ok"); n_ok += 1
+                    completed_files += [opaque_path, transp_path]
                 else:  lcb(f"⏹  Stopped at point {last_pt} — partial files kept.", "err"); n_err += 1
             else:
                 ext = ".webm" if settings.get("transparent", False) else ".mp4"
                 out_path = os.path.join(out_folder, stem + ext)
                 ok, last_pt = generate_video(comments, durations, out_path, settings,
                                              pause_event, stop_event, pcb,
-                                             lambda m, t="ok": lcb(m, t), start_point=start_point)
-                if ok: lcb(f"✅  Saved → {out_path}", "ok"); n_ok += 1
+                                             lambda m, t="ok": lcb(m, t),
+                                             start_point=start_point, end_point=end_point)
+                if ok:
+                    lcb(f"✅  Saved → {out_path}", "ok"); n_ok += 1
+                    completed_files.append(out_path)
                 else:  lcb(f"⏹  Stopped at point {last_pt} — partial file kept.", "err"); n_err += 1
             ui_queue.put(("file_done", fp, ok))
         except Exception as e:
@@ -1106,29 +1224,269 @@ def render_thread(targets, settings):
         if stop_event.is_set(): break
         start_point = 0
     if stop_event.is_set():
-        stop_event.clear(); ui_queue.put(("all_done", "Render stopped."))
+        stop_event.clear(); ui_queue.put(("all_done", "Render stopped.", []))
     else:
         msg = f"Render complete — {n_ok} succeeded, {n_err} failed."
-        lcb(msg, "ok"); ui_queue.put(("all_done", msg))
+        lcb(msg, "ok"); ui_queue.put(("all_done", msg, completed_files))
     processing_state["running"] = False
+
+def resume_partial():
+    """Select an existing partial video, pick its GPX, render the rest chunk by chunk,
+    merging into a properly-named accumulator after every 100 points."""
+    if processing_state["running"]:
+        messagebox.showinfo("Busy","A render is already in progress."); return
+
+    # ── pick the partial video ────────────────────────────────────────────────
+    partial_path = filedialog.askopenfilename(
+        title="Select partial video (stem_NNNN.mp4 / .webm)",
+        filetypes=[("Video files","*.mp4 *.webm")])
+    if not partial_path: return
+
+    base   = os.path.splitext(os.path.basename(partial_path))[0]
+    ext    = os.path.splitext(partial_path)[1]
+    token  = base.rsplit("_", 1)[-1]
+    if not token.isdigit():
+        messagebox.showerror("Cannot parse","Could not extract point number from filename.\n"
+                             "Expected pattern: name_NNNN.mp4"); return
+    last_pt    = int(token)
+    start_pt   = last_pt + 1
+    stem_clean = base[:base.rfind("_")]
+
+    # ── pick the GPX source file ──────────────────────────────────────────────
+    gpx_path = filedialog.askopenfilename(
+        title=f"Select GPX file (will render from point {start_pt})",
+        filetypes=[("GPX files","*.gpx")])
+    if not gpx_path: return
+
+    out_dir        = os.path.dirname(partial_path)
+    final_path     = os.path.join(out_dir, stem_clean + ext)
+    is_transparent = ext == ".webm"
+
+    # Add GPX to the file queue so it appears in the left listbox
+    if gpx_path not in file_list:
+        file_list.append(gpx_path)
+    file_status[gpx_path] = "rendering"
+    refresh_listbox()
+
+    settings = {"resolution": RESOLUTIONS.get(res_var.get(),(1280,720)),
+                "fps": fps_var.get(),
+                "bg_color": bg_color_var.get(), "text_color": txt_color_var.get(),
+                "cmt_fontsize": cmt_size_var.get(), "time_fontsize": ts_size_var.get(),
+                "text_align": align_var.get(), "use_flags": use_flags_var.get(),
+                "transparent": is_transparent, "both": False,
+                "total_secs": 1.0, "start_point": start_pt, "end_point": None}
+
+    def _thread():
+        def lcb(msg, tag=""): ui_queue.put(("log", msg, tag))
+        def pcb(cf, tf, eta, abs_pt, tp, cmt, ts, use_fl):
+            ui_queue.put(("progress", cf, tf, eta, abs_pt, tp, cmt, ts, use_fl))
+            pct = int(cf / tf * 100) if tf else 0
+            ui_queue.put(("overall", pct))
+
+        def _del(*paths):
+            for p in paths:
+                if p and os.path.exists(p):
+                    try: os.remove(p)
+                    except: pass
+
+        try:
+            comments = extract_comments(gpx_path)
+            if not comments:
+                lcb("⚠  No comments found in GPX.","err")
+                ui_queue.put(("file_done", gpx_path, False))
+                ui_queue.put(("all_done","Resume failed.")); return
+            if start_pt >= len(comments):
+                lcb(f"⚠  Start point {start_pt} ≥ total {len(comments)}.","err")
+                ui_queue.put(("file_done", gpx_path, False))
+                ui_queue.put(("all_done","Resume failed.")); return
+
+            try:    coords = extract_all_coords(gpx_path)
+            except: coords = []
+            ui_queue.put(("file_start", gpx_path, 1, 1, coords))
+
+            durations = calculate_durations(comments)
+            cum_times = [0.0]
+            for d in durations[1:]: cum_times.append(cum_times[-1] + max(d, 0))
+            n_pts            = len(comments)
+            t_offset         = cum_times[start_pt] if start_pt < n_pts else 0.0
+            eff_duration     = cum_times[-1] - t_offset
+            fps              = settings["fps"]
+            w, h             = settings["resolution"]
+            use_flags        = settings.get("use_flags", False)
+            total_frames_all = int(eff_duration * fps)
+            wall_start       = time.time()
+            stopped          = [False]
+            last_pt_ref      = [start_pt]
+            frames_before    = 0
+            pid              = os.getpid()
+            chunk_idx        = [0]
+
+            # The running accumulator starts as the original partial.
+            # After every chunk it becomes stem_NNNN.ext, then finally stem.ext.
+            accumulator = [partial_path]   # current "accumulated so far" file
+
+            lcb(f"🎬  Resuming from point {start_pt}, merging per chunk","info")
+
+            pt = start_pt
+            ok_all = True
+            try:
+                while pt < n_pts:
+                    if stop_event.is_set(): stopped[0] = True; break
+
+                    chunk_start = pt
+                    chunk_end   = min(pt + AUTOSAVE_EVERY, n_pts)
+                    chunk_file  = os.path.join(out_dir,
+                        f"_chunk_{stem_clean}_{pid}_{chunk_idx[0]:04d}{ext}")
+                    chunk_idx[0] += 1
+
+                    clip, chunk_dur, make_frame_rgba = _render_chunk(
+                        comments, cum_times, chunk_start, chunk_end, n_pts,
+                        settings, pause_event, stop_event,
+                        frames_before, total_frames_all,
+                        wall_start, pcb, use_flags, is_transparent, stopped, last_pt_ref
+                    )
+
+                    if chunk_dur <= 0:
+                        pt = chunk_end; continue
+                    if stopped[0] and clip is None and make_frame_rgba is None:
+                        break
+
+                    try:
+                        if is_transparent:
+                            _write_chunk_transparent(make_frame_rgba, chunk_dur, fps, w, h, chunk_file)
+                        else:
+                            clip.write_videofile(chunk_file, codec="libx264", fps=fps,
+                                                 verbose=False, logger=None)
+
+                        frames_before += int(chunk_dur * fps)
+
+                        # Build new accumulator: merge current accumulator + chunk
+                        n_done       = min(chunk_end, n_pts)
+                        is_final_chunk = (chunk_end >= n_pts) and not stop_event.is_set()
+                        if is_final_chunk:
+                            new_acc = final_path          # clean name on last chunk
+                        else:
+                            new_acc = os.path.join(out_dir, f"{stem_clean}_{n_done:04d}{ext}")
+
+                        prev_acc = accumulator[0]
+                        _ffmpeg_concat([prev_acc, chunk_file], new_acc)
+
+                        # Delete previous accumulator only if it's not the original partial
+                        # (we keep the original safe until it has been superseded)
+                        if prev_acc != partial_path:
+                            _del(prev_acc)
+                        _del(chunk_file)
+
+                        accumulator[0] = new_acc
+                        lcb(f"💾  {'✅  Final' if is_final_chunk else 'Partial'} → {os.path.basename(new_acc)}")
+
+                    except Exception as e:
+                        _del(chunk_file)
+                        lcb(f"⚠  Chunk failed: {e}","err")
+
+                    if stopped[0] or stop_event.is_set():
+                        stopped[0] = True; break
+                    pt = chunk_end
+
+            finally:
+                for f in os.listdir(out_dir):
+                    if f.startswith(f"_chunk_{stem_clean}_{pid}_"):
+                        _del(os.path.join(out_dir, f))
+
+            ok_all = not stopped[0]
+            if ok_all:
+                # Delete the original partial — it has been fully consumed
+                if os.path.exists(partial_path) and partial_path != accumulator[0]:
+                    try:
+                        os.remove(partial_path)
+                        lcb(f"🗑  Deleted original partial: {os.path.basename(partial_path)}")
+                    except Exception as e:
+                        lcb(f"⚠  Could not delete original partial: {e}", "err")
+                lcb(f"✅  Resumed & merged → {os.path.basename(accumulator[0])}","ok")
+                ui_queue.put(("file_done", gpx_path, True))
+                ui_queue.put(("all_done", "Resume complete.", [accumulator[0]]))
+            else:
+                lcb(f"⏹  Stopped — latest file: {os.path.basename(accumulator[0])}","err")
+                ui_queue.put(("file_done", gpx_path, False))
+                ui_queue.put(("all_done", "Resume stopped.", []))
+
+        except Exception as e:
+            lcb(f"❌  Resume error: {e}","err")
+            ui_queue.put(("file_done", gpx_path, False))
+            ui_queue.put(("all_done", "Resume failed.", []))
+        processing_state["running"] = False
+
+    processing_state["running"] = True
+    stop_event.clear(); pause_event.set()
+    overall_pb["value"] = 0; overall_pct.config(text="  0%")
+    pause_btn_ref[0].config(text="⏸  Pause")
+    log(f"⏩  Resuming {os.path.basename(partial_path)} from point {start_pt}","info")
+    threading.Thread(target=_thread, daemon=True).start()
+
+
+def merge_two_videos():
+    """Concatenate two existing video files into a new output file."""
+    if processing_state["running"]:
+        messagebox.showinfo("Busy","A render is already in progress."); return
+
+    a = filedialog.askopenfilename(title="Select FIRST video",
+                                   filetypes=[("Video files","*.mp4 *.webm")])
+    if not a: return
+    b = filedialog.askopenfilename(title="Select SECOND video (appended after first)",
+                                   filetypes=[("Video files","*.mp4 *.webm")])
+    if not b: return
+
+    ext = os.path.splitext(a)[1]
+    out = filedialog.asksaveasfilename(title="Save merged video as",
+                                       defaultextension=ext,
+                                       filetypes=[("Video files",f"*{ext}")])
+    if not out: return
+
+    def _thread():
+        def lcb(msg,tag=""): ui_queue.put(("log",msg,tag))
+        try:
+            lcb(f"🔗  Merging {os.path.basename(a)} + {os.path.basename(b)} …","info")
+            _ffmpeg_concat([a, b], out)
+            lcb(f"✅  Saved → {out}","ok")
+            ui_queue.put(("all_done", "Merge complete.", [out]))
+        except Exception as e:
+            lcb(f"❌  Merge error: {e}","err")
+            ui_queue.put(("all_done", "Merge failed.", []))
+        processing_state["running"] = False
+
+    processing_state["running"] = True
+    log(f"🔗  Merging two videos → {os.path.basename(out)}","info")
+    threading.Thread(target=_thread, daemon=True).start()
+
 
 def start_rendering():
     if processing_state["running"]: messagebox.showinfo("Busy", "A render is already in progress."); return
     targets = [fp for fp in file_list if file_status.get(fp) in ("pending", "error")]
     if not targets: messagebox.showwarning("Nothing to render", "No pending files in the queue.\nAdd GPX files or clear completed ones."); return
 
-    # Pre-scan all files to compute total video duration for the overall bar
-    is_dual = both_var.get()
+    # Pre-scan all files to compute total video duration for the overall bar,
+    # accounting for start_point (first file only) and end_point.
+    is_dual   = both_var.get()
+    sp_raw    = start_point_var.get().strip()
+    ep_raw    = end_point_var.get().strip()
+    scan_sp   = max(0, int(sp_raw)) if sp_raw.isdigit() else 0
+    scan_ep   = int(ep_raw) if ep_raw.isdigit() else None
     total_secs = 0.0
-    for fp in targets:
+    for scan_idx, fp in enumerate(targets):
         try:
             cmts = extract_comments(fp)
             if cmts:
                 durs = calculate_durations(cmts)
-                total_secs += sum(max(d, 0) for d in durs) * (2 if is_dual else 1)
+                cum  = [0.0]
+                for d in durs[1:]: cum.append(cum[-1] + max(d, 0))
+                sp_i = scan_sp if scan_idx == 0 else 0
+                ep_i = min(scan_ep, len(cum)-1) if scan_ep is not None else len(cum)-1
+                t_s  = cum[sp_i] if sp_i < len(cum) else 0.0
+                t_e  = cum[ep_i]
+                total_secs += max(0.0, t_e - t_s) * (2 if is_dual else 1)
         except Exception:
             pass
-    if total_secs <= 0: total_secs = 1.0  # guard against empty/unreadable files
+    if total_secs <= 0: total_secs = 1.0
     settings={"resolution":RESOLUTIONS.get(res_var.get(),(1280,720)),"fps":fps_var.get(),
               "bg_color":bg_color_var.get(),"text_color":txt_color_var.get(),
               "cmt_fontsize":cmt_size_var.get(),"time_fontsize":ts_size_var.get(),
@@ -1136,7 +1494,8 @@ def start_rendering():
               "transparent":transparent_var.get(),
               "both":both_var.get(),
               "total_secs":total_secs,
-              "start_point":max(0,int(start_point_var.get())) if start_point_var.get().strip().isdigit() else 0}
+              "start_point":max(0,int(start_point_var.get())) if start_point_var.get().strip().isdigit() else 0,
+              "end_point":int(end_point_var.get()) if end_point_var.get().strip().isdigit() else None}
     stop_event.clear(); pause_event.set(); processing_state["running"]=True
     overall_pb["value"]=0; overall_pct.config(text="  0%"); pause_btn_ref[0].config(text="⏸  Pause")
     log(f"▶  Starting render — {len(targets)} file(s)","info")

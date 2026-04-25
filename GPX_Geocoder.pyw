@@ -916,12 +916,117 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
     refresh_cache_count_label()
     if stopped_early:
         status_label.config(text=f"Stopped (partial saved): {basename}")
+        return None
     else:
         status_label.config(text=f"Completed: {basename}")
     progress_var.set(0)
     eta_label.config(text="")
     point_counter_label.config(text="—  /  —  pts")
     file_counter_label.config(text="file  —  /  —")
+    return out_path
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Completion dialog
+# ──────────────────────────────────────────────────────────────────────────────
+def show_completion_dialog(completed_paths):
+    """Styled dialog listing all geocoded output files.
+    User can open one in Cache Editor or send one or more to Towns Video."""
+    d = tk.Toplevel(root)
+    d.title("Processing Complete")
+    d.configure(bg=C["bg"])
+    d.geometry("580x440")
+    d.resizable(False, True)
+    d.grab_set()
+    d.lift()
+
+    tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
+    tk.Label(d, text="PROCESSING COMPLETE",
+             font=("Consolas",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(12,2), anchor="w")
+    tk.Label(d, text=f"{len(completed_paths)} file(s) geocoded successfully.",
+             font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
+    tk.Label(d, text="Select file(s) and choose what to do next:",
+             font=("Consolas",8), bg=C["bg"], fg=C["dim"]).pack(padx=16, pady=(2,8), anchor="w")
+    tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16)
+
+    # listbox — multi-select so user can send several files to Towns Video at once
+    lf = tk.Frame(d, bg=C["accent"], padx=1, pady=1)
+    lf.pack(fill="both", expand=True, padx=16, pady=8)
+    li = tk.Frame(lf, bg=C["panel2"]); li.pack(fill="both", expand=True)
+    lsb = ttk.Scrollbar(li, orient="vertical"); lsb.pack(side="right", fill="y")
+    listbox = tk.Listbox(li, yscrollcommand=lsb.set, font=("Consolas",8),
+                          bg=C["panel2"], fg=C["text"],
+                          selectbackground=C["accent"], selectforeground="black",
+                          activestyle="none", relief="flat", borderwidth=0,
+                          selectmode="extended")   # extended = Shift/Ctrl multi-select
+    listbox.pack(fill="both", expand=True)
+    lsb.config(command=listbox.yview)
+
+    for p in completed_paths:
+        listbox.insert(tk.END, "  " + os.path.basename(p))
+    if completed_paths:
+        listbox.selection_set(0)
+
+    # hint for multi-select
+    tk.Label(d, text="Shift-click or Ctrl-click to select multiple files (for Towns Video)",
+             font=("Consolas",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,4))
+
+    def _get_selection(single=False):
+        """Return list of selected paths, or show warning if nothing selected."""
+        sel = listbox.curselection()
+        if not sel:
+            messagebox.showwarning("No selection", "Please select at least one file.", parent=d)
+            return []
+        paths = [completed_paths[i] for i in sel]
+        if single and len(paths) > 1:
+            messagebox.showwarning("Single file only",
+                                   "Cache Editor opens one file at a time.\nPlease select a single file.",
+                                   parent=d)
+            return []
+        return paths
+
+    def _find_script(candidates):
+        for c in candidates:
+            p = os.path.join(SCRIPT_DIR, c)
+            if os.path.exists(p):
+                return p
+        return None
+
+    def _launch(script, args=()):
+        import subprocess
+        try:
+            subprocess.Popen([sys.executable, script] + list(args), cwd=SCRIPT_DIR)
+        except Exception as e:
+            messagebox.showerror("Launch error", f"Cannot open script:\n{e}", parent=d)
+
+    def _open_in_cache_editor():
+        paths = _get_selection(single=True)
+        if not paths: return
+        script = _find_script(["Cache_Editor.pyw","Cache_Editor.py",
+                                "cache_editor.pyw","cache_editor.py"])
+        if not script:
+            script = filedialog.askopenfilename(
+                title="Select Cache Editor", filetypes=[("Python files","*.py *.pyw")], parent=d)
+        if not script: return
+        _launch(script, ["--gpx", paths[0]])
+
+    def _open_in_towns_video():
+        paths = _get_selection(single=False)
+        if not paths: return
+        script = _find_script(["Towns_video_dx.pyw","Towns_video_dx.py",
+                                "towns_video_dx.pyw","towns_video_dx.py",
+                                "Towns_video.pyw","Towns_video.py"])
+        if not script:
+            script = filedialog.askopenfilename(
+                title="Select Towns Video script", filetypes=[("Python files","*.py *.pyw")], parent=d)
+        if not script: return
+        _launch(script, paths)   # pass all selected GPX paths as positional args
+
+    bf = tk.Frame(d, bg=C["bg"]); bf.pack(fill="x", padx=16, pady=(0,12))
+    mk_btn(bf, "📂  Open in Cache Editor",  C["blue"],   _open_in_cache_editor).pack(side="left", padx=(0,6))
+    mk_btn(bf, "🎬  Open in Towns Video",   C["orange"], _open_in_towns_video).pack(side="left", padx=(0,6))
+    mk_btn(bf, "Close",                     C["dim"],    d.destroy).pack(side="left")
+    tk.Frame(d, bg=C["accent"], height=2).pack(fill="x", side="bottom")
+
 
 def process_files_thread(conn, file_paths, cmt_choice_value, dest_choice_value, start_index=0):
     manual_dest = None
@@ -933,11 +1038,14 @@ def process_files_thread(conn, file_paths, cmt_choice_value, dest_choice_value, 
     stop_event.clear()
     pause_event.set()
     processing_state["running"] = True
+    completed_paths = []
     for idx, fp in enumerate(file_paths, start=1):
         if not root.winfo_exists(): break
         si = start_index if idx == 1 else 0
-        process_single_file(conn, fp, cmt_choice_value, dest_choice_value,
-                            manual_dest, idx, len(file_paths), start_index=si)
+        result = process_single_file(conn, fp, cmt_choice_value, dest_choice_value,
+                                     manual_dest, idx, len(file_paths), start_index=si)
+        if result:
+            completed_paths.append(result)
         if stop_event.is_set(): break
     processing_state["running"] = False
     if pause_btn_ref[0]: pause_btn_ref[0].config(text="⏸  Pause")
@@ -946,7 +1054,8 @@ def process_files_thread(conn, file_paths, cmt_choice_value, dest_choice_value, 
         status_label.config(text="Processing stopped.")
     else:
         status_label.config(text="All files processed.")
-        messagebox.showinfo("Done", "All files processed successfully.")
+        if completed_paths:
+            root.after(0, show_completion_dialog, completed_paths)
 
 def start_processing_from_button():
     if processing_state["running"]:
@@ -1097,4 +1206,22 @@ root.protocol("WM_DELETE_WINDOW", on_close)
 
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # auto-start processing if a GPX path was passed as argv[1]
+    if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+        def _auto_start():
+            # apply comment format if passed as argv[2]
+            if len(sys.argv) > 2:
+                try:
+                    cmt_choice.set(int(sys.argv[2]))
+                except (ValueError, IndexError):
+                    pass
+            refresh_cache_count_label()
+            t = threading.Thread(
+                target=process_files_thread,
+                args=(db_conn, [sys.argv[1]], cmt_choice.get(), destination_choice.get()),
+                daemon=True)
+            processing_state["thread"] = t
+            t.start()
+        root.after(800, _auto_start)   # 800ms lets the splash finish first
+
     root.mainloop()

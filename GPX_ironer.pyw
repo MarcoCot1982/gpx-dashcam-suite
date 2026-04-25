@@ -8,7 +8,7 @@ Contact: marcocot1982@gmail.com
 Dark cinematic UI. Auto-saves a _temp file every 10 minutes after changes.
 """
 
-import os, math, time, threading
+import os, math, time, threading, sys
 from datetime import datetime, timedelta
 import requests
 
@@ -346,6 +346,9 @@ class IronApp:
         # Edit Gap: full width
         ba5 = tk.Frame(ba, bg=C["panel"]); ba5.pack(fill="x", pady=2)
         self._mk_btn(ba5, "✂  Edit Gap", C["blue"], self.edit_gap).pack(fill="x")
+        # Set Avg Speed: full width
+        ba6 = tk.Frame(ba, bg=C["panel"]); ba6.pack(fill="x", pady=2)
+        self._mk_btn(ba6, "⚡  Set Avg Speed", C["blue"], self.set_avg_speed).pack(fill="x")
 
         self._sec_hdr(left, "FINALISE")
         fn = tk.Frame(left, bg=C["panel"]); fn.pack(fill="x", padx=10, pady=6)
@@ -593,9 +596,16 @@ class IronApp:
     def select_files(self):
         path = filedialog.askopenfilename(filetypes=[("GPX","*.gpx")])
         if not path: return
+        self._load_file(path)
+
+    def _load_file(self, path):
+        """Load a GPX file directly by path (used by select_files and argv auto-load)."""
         self.source_path      = path
         self.current_filename = os.path.basename(path)
-        with open(path,"r") as f: gpx = gpxpy.parse(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f: gpx = gpxpy.parse(f)
+        except Exception as e:
+            messagebox.showerror("Load error", f"Failed to parse GPX:\n{e}"); return
         self.points = [(p.latitude, p.longitude, p.time)
                        for t in gpx.tracks for s in t.segments for p in s.points]
 
@@ -682,25 +692,35 @@ class IronApp:
         self.refresh_map_and_tree()
 
     def self_correct(self):
-        """Run auto-iron then bridge in sequence with a single undo snapshot."""
+        """Run auto-iron then bridge in sequence, restricted to visible (filtered/focused) points."""
         if not self.points: return
         self._push_undo()
-        # ── iron pass ─────────────────────────────────────────────────────────
+
+        visible    = self._get_visible_indices()
+        visible_s  = set(visible)          # O(1) membership test
+        scope_desc = ("filtered/focused section" if (self.filtered_indices is not None
+                       or self.focus_range) else "full track")
+
+        # ── iron pass — only correct points that are in scope ─────────────────
         try: iron_t = float(self.max_kph_iron.get())
         except: iron_t = 5000.0
         cleaned = list(self.points); iron_count = 0
-        for i in range(1, len(cleaned)):
+        for i in visible:
+            if i == 0: continue
             if speed_kph_between(cleaned[i-1], cleaned[i]) > iron_t:
                 cleaned[i] = (splice_decimals(cleaned[i-1][0], cleaned[i][0]),
                               splice_decimals(cleaned[i-1][1], cleaned[i][1]),
                               cleaned[i][2])
                 iron_count += 1
         self.points = cleaned
-        # ── bridge pass ───────────────────────────────────────────────────────
+
+        # ── bridge pass — only bridge points that are in scope ────────────────
         try: bridge_t = float(self.max_kph_bridge.get())
         except: bridge_t = 200.0
         new_pts = list(self.points); bridge_count = 0
-        for i in range(1, len(new_pts)-1):
+        for i in visible:
+            if i == 0 or i >= len(new_pts) - 1: continue
+            if i not in visible_s: continue
             s1 = speed_kph_between(new_pts[i-1], new_pts[i])
             s2 = speed_kph_between(new_pts[i],   new_pts[i+1])
             if s1 > bridge_t and s2 > bridge_t:
@@ -711,7 +731,8 @@ class IronApp:
                     bridge_count += 1
         self.points = new_pts
         self._mark_dirty()
-        self._set_status(f"Self-correct: {iron_count} ironed, {bridge_count} bridged.")
+        self._set_status(
+            f"Self-correct ({scope_desc}): {iron_count} ironed, {bridge_count} bridged.")
         self.refresh_map_and_tree()
     def refresh_map_and_tree(self):
         # Sync zoom from widget — catches scroll-wheel zoom that bypasses our buttons
@@ -991,6 +1012,137 @@ class IronApp:
         d.grab_set()
 
     # ── ADD ELEVATION ──────────────────────────────────────────────────────────
+    def set_avg_speed(self):
+        """Select 2 points; redistribute timestamps between them so the average
+        speed equals a user-supplied value, then shift all subsequent points."""
+        sel = self.tree.selection()
+        if len(sel) != 2:
+            messagebox.showerror("Set Avg Speed", "Select exactly 2 points in the table.")
+            return
+        i0, i1 = sorted([int(self.tree.item(s)["values"][0]) for s in sel])
+        if i1 <= i0:
+            messagebox.showerror("Set Avg Speed", "Select two different points."); return
+
+        # timestamps must exist on both endpoints
+        t0, t1 = self.points[i0][2], self.points[i1][2]
+        if t0 is None or t1 is None:
+            messagebox.showerror("Set Avg Speed",
+                "Both selected points must have timestamps."); return
+
+        # cumulative distances along the track between i0 and i1
+        cum_dist = [0.0]
+        for k in range(i0, i1):
+            d = haversine(self.points[k][0], self.points[k][1],
+                          self.points[k+1][0], self.points[k+1][1])
+            cum_dist.append(cum_dist[-1] + d)
+        total_dist_m = cum_dist[-1]
+
+        if total_dist_m < 1.0:
+            messagebox.showerror("Set Avg Speed",
+                "Total distance between the two points is too small (< 1 m).")
+            return
+
+        cur_secs  = (t1 - t0).total_seconds()
+        cur_speed = (total_dist_m / cur_secs * 3.6) if cur_secs > 0 else 0.0
+
+        # ── dialog ────────────────────────────────────────────────────────────
+        d = tk.Toplevel(self.root)
+        d.title(f"Set avg speed  #{i0} → #{i1}")
+        d.configure(bg=C["bg"]); d.resizable(False, False)
+        tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
+
+        tk.Label(d, text=f"Average speed  #{i0} → #{i1}",
+                 font=("Consolas",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(
+                 padx=16, pady=(14,2), anchor="w")
+
+        info_lines = [
+            f"Points:        {i0} → {i1}  ({i1-i0} segments)",
+            f"Distance:      {total_dist_m/1000:.3f} km",
+            f"Current time:  {int(cur_secs//3600):02d}:{int(cur_secs%3600//60):02d}:{int(cur_secs%60):02d}",
+            f"Current speed: {cur_speed:.1f} kph",
+        ]
+        for line in info_lines:
+            tk.Label(d, text=line, font=("Consolas",8), bg=C["bg"],
+                     fg=C["muted"]).pack(padx=16, anchor="w")
+
+        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=(10,8))
+
+        ef = tk.Frame(d, bg=C["bg"]); ef.pack(padx=16, pady=(0,4))
+        tk.Label(ef, text="Target speed (kph):", font=("Consolas",9),
+                 bg=C["bg"], fg=C["text"]).pack(side="left", padx=(0,8))
+        spd_var = tk.StringVar(value=f"{cur_speed:.1f}")
+        spd_e = ttk.Entry(ef, textvariable=spd_var, width=10, font=("Consolas",10))
+        spd_e.pack(side="left")
+        spd_e.select_range(0, "end"); spd_e.focus_set()
+
+        preview_lbl = tk.Label(d, text="", font=("Consolas",8), bg=C["bg"], fg=C["muted"])
+        preview_lbl.pack(padx=16, anchor="w", pady=(4,10))
+
+        def _preview(*_):
+            try:
+                kph = float(spd_var.get())
+                if kph <= 0: raise ValueError
+                new_secs  = total_dist_m / (kph / 3.6)
+                delta_s   = new_secs - cur_secs
+                sign      = "+" if delta_s >= 0 else "−"
+                dh, rem   = divmod(abs(delta_s), 3600)
+                dm, ds    = divmod(rem, 60)
+                nh, nrem  = divmod(new_secs, 3600)
+                nm, ns_   = divmod(nrem, 60)
+                preview_lbl.config(
+                    text=(f"→ new duration: {int(nh):02d}:{int(nm):02d}:{int(ns_):02d}"
+                          f"  |  tail shift: {sign}{int(dh):02d}:{int(dm):02d}:{int(ds):02d}"),
+                    fg=C["muted"])
+            except (ValueError, ZeroDivisionError):
+                preview_lbl.config(text="enter a positive number (kph)", fg=C["red"])
+
+        spd_var.trace_add("write", _preview)
+        _preview()
+
+        def _apply():
+            try:
+                kph = float(spd_var.get())
+                if kph <= 0: raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid input", "Enter a positive speed in kph.", parent=d)
+                return
+
+            new_total_secs = total_dist_m / (kph / 3.6)
+            delta = timedelta(seconds=(new_total_secs - cur_secs))
+
+            self._push_undo()
+            new_pts = list(self.points)
+
+            # redistribute intermediate timestamps proportionally by cumulative distance
+            for offset in range(1, i1 - i0):
+                frac = cum_dist[offset] / total_dist_m
+                new_t = t0 + timedelta(seconds=frac * new_total_secs)
+                lat, lon, _ = new_pts[i0 + offset]
+                new_pts[i0 + offset] = (lat, lon, new_t)
+
+            # shift all points from i1 onwards by the total delta
+            for j in range(i1, len(new_pts)):
+                lat, lon, t = new_pts[j]
+                new_pts[j] = (lat, lon, t + delta if t else None)
+
+            self.points = new_pts
+            self._mark_dirty()
+            nh, nrem = divmod(new_total_secs, 3600)
+            nm, ns_  = divmod(nrem, 60)
+            self._set_status(
+                f"Avg speed #{i0}→#{i1} set to {kph:.1f} kph  ·  "
+                f"new duration {int(nh):02d}:{int(nm):02d}:{int(ns_):02d}  ·  "
+                f"{len(self.points)-i1} points tail-shifted.")
+            d.destroy()
+            self.refresh_map_and_tree()
+
+        bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=16, pady=(0,14))
+        self._mk_btn(bf, "Apply", C["green"], _apply).pack(side="left", padx=(0,6))
+        self._mk_btn(bf, "Cancel", C["dim"], d.destroy).pack(side="left")
+        tk.Frame(d, bg=C["accent"], height=2).pack(fill="x", side="bottom")
+        d.bind("<Return>", lambda e: _apply())
+        d.bind("<Escape>", lambda e: d.destroy())
+        d.grab_set()
     def add_elevation(self):
         if not self.points:
             messagebox.showwarning("No data", "Load a GPX file first."); return
@@ -1060,10 +1212,12 @@ class IronApp:
                 msg = (f"Elevation added: {filled:,}/{total:,} points.\n"
                        f"{'No errors.' if errors == 0 else f'{errors} batch error(s).'}\n"
                        f"{'All points have elevation.' if missing == 0 else f'{missing} point(s) missing elevation.'}\n\n"
-                       f"Saved → {os.path.basename(out_path)}")
+                       f"Saved → {os.path.basename(out_path)}\n\n"
+                       f"Launching GPX Geocoder on this file…")
                 self.root.after(0, lambda m=msg, p=out_path: [
                     self._set_status(f"✅ Saved → {os.path.basename(p)}"),
-                    messagebox.showinfo("Elevation done", m)
+                    messagebox.showinfo("Elevation done", m),
+                    self._launch_geocoder(p)
                 ])
             except Exception as e:
                 self.root.after(0, lambda err=str(e): [
@@ -1075,6 +1229,87 @@ class IronApp:
                 state="normal", text="⛰  Add Altitude (DEM)"))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _launch_geocoder(self, gpx_path):
+        """Prompt for comment format, then launch GPX_Geocoder.pyw with file + format choice."""
+        candidates = ["GPX_Geocoder.pyw", "GPX_geocoder.pyw",
+                      "gpx_geocoder.pyw", "GPX_Geocoder.py"]
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        geocoder_path = None
+        for name in candidates:
+            p = os.path.join(script_dir, name)
+            if os.path.exists(p):
+                geocoder_path = p; break
+
+        if not geocoder_path:
+            messagebox.showwarning(
+                "Geocoder not found",
+                "GPX_Geocoder.pyw was not found in the same folder.\n"
+                f"Looking in: {script_dir}\n\n"
+                "Open it manually and load the _ele.gpx file.")
+            return
+
+        # ── comment format dialog ─────────────────────────────────────────────
+        d = tk.Toplevel(self.root)
+        d.title("Geocoder — comment format")
+        d.configure(bg=C["bg"]); d.resizable(False, False)
+        d.grab_set()
+        tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
+        tk.Label(d, text="COMMENT FORMAT",
+                 font=("Consolas",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=20, pady=(14,4), anchor="w")
+        tk.Label(d, text="Choose what the Geocoder will write into each trackpoint:",
+                 font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w", pady=(0,10))
+        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
+
+        fmt_var = tk.IntVar(value=2)
+        _rkw = dict(bg=C["bg"], fg=C["text"],
+                    activebackground=C["bg"], activeforeground=C["accent"],
+                    selectcolor=C["accent2"], font=("Consolas",9),
+                    anchor="w", relief="flat")
+        rf = tk.Frame(d, bg=C["bg"]); rf.pack(fill="x", padx=20, pady=10)
+        tk.Radiobutton(rf, text="Road, Town",
+                       variable=fmt_var, value=1, **_rkw).pack(fill="x", pady=2)
+        tk.Radiobutton(rf, text="Road, Town  (Province)",
+                       variable=fmt_var, value=2, **_rkw).pack(fill="x", pady=2)
+        tk.Radiobutton(rf, text="Road | Town | Province | Country",
+                       variable=fmt_var, value=3, **_rkw).pack(fill="x", pady=2)
+
+        chosen = [None]
+
+        def _ok():
+            chosen[0] = fmt_var.get()
+            d.destroy()
+
+        def _cancel():
+            d.destroy()
+
+        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
+        bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=20, pady=12)
+        self._mk_btn(bf, "▶  Launch Geocoder", C["green"], _ok).pack(side="left", padx=(0,8))
+        self._mk_btn(bf, "Cancel",             C["dim"],   _cancel).pack(side="left")
+        tk.Frame(d, bg=C["accent"], height=2).pack(fill="x", side="bottom")
+        d.bind("<Return>", lambda e: _ok())
+        d.bind("<Escape>", lambda e: _cancel())
+        self.root.wait_window(d)
+
+        if chosen[0] is None:
+            return   # user cancelled
+
+        # ── launch ────────────────────────────────────────────────────────────
+        try:
+            import subprocess
+            _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen(
+                [sys.executable, geocoder_path, gpx_path, str(chosen[0])],
+                cwd=script_dir,
+                creationflags=_NO_WINDOW
+            )
+            fmt_names = {1: "Road, Town", 2: "Road, Town (Province)", 3: "Road|Town|Province|Country"}
+            self._set_status(
+                f"Geocoder launched · {os.path.basename(gpx_path)} · format: {fmt_names[chosen[0]]}")
+        except Exception as e:
+            messagebox.showerror("Launch error",
+                f"Could not launch GPX_Geocoder.pyw:\n{e}")
 
     # ── TREE INTERACTION ───────────────────────────────────────────────────────
     def center_on_selected(self):
@@ -1196,4 +1431,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     show_splash(root)
     app  = IronApp(root)
+    # auto-load if a GPX path was passed as argv[1]
+    if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+        root.after(500, lambda: app._load_file(sys.argv[1]))
     root.mainloop()

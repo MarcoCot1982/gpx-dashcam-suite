@@ -1,7 +1,7 @@
 import os
 import re
-import io
-import base64
+import sys
+import subprocess
 import time
 import threading
 import cv2
@@ -10,7 +10,7 @@ import pytesseract
 from datetime import datetime, timedelta
 from tkinter import Tk, Frame, Label, Button, Entry, StringVar, ttk, scrolledtext, filedialog
 import tkinter as tk
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageTk
 from staticmap import StaticMap, CircleMarker
 
 # ---------------- CONFIG ----------------
@@ -23,69 +23,7 @@ FLOAT5_RE      = re.compile(r'(-?\d{1,3}\.\d{5})')
 FLOAT_LOOSE_RE = re.compile(r'(-?\d{1,3}\.\d{4,5})')
 FLOAT_GENERIC_RE = re.compile(r'(-?\d+\.\d+)')
 
-# ──────────────────────────────────────────────────────────────────────────────
-# WINDOW ICON  (GPS pin + film-strip holes, embedded as base64 — no .ico file)
-# ──────────────────────────────────────────────────────────────────────────────
-def _make_icon_image(size):
-    """Draw a GPS map-pin with film-strip sprocket holes in the app's orange."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d   = ImageDraw.Draw(img)
-    s   = size
-    pin_cx    = s // 2
-    pin_top   = int(s * 0.04)
-    pin_r     = int(s * 0.36)
-    circle_bot = pin_top + pin_r * 2
-    pin_tip   = int(s * 0.93)
-    inner_cy  = pin_top + pin_r
-
-    # Shadow
-    sc = (120, 60, 0, 140)
-    d.ellipse([pin_cx-pin_r+2, pin_top+2, pin_cx+pin_r+2, circle_bot+2], fill=sc)
-    d.polygon([(pin_cx-pin_r//2+2, circle_bot+1),
-               (pin_cx+pin_r//2+2, circle_bot+1),
-               (pin_cx+2, pin_tip+2)], fill=sc)
-
-    # Pin body — accent orange
-    orange = (245, 166, 35, 255)
-    d.ellipse([pin_cx-pin_r, pin_top, pin_cx+pin_r, circle_bot], fill=orange)
-    d.polygon([(pin_cx-pin_r//2, circle_bot-1),
-               (pin_cx+pin_r//2, circle_bot-1),
-               (pin_cx, pin_tip)], fill=orange)
-    d.ellipse([pin_cx-pin_r, pin_top, pin_cx+pin_r, circle_bot],
-              outline=(180, 110, 0, 255), width=max(1, s//32))
-
-    # Film-strip sprocket holes (3 top + 3 bottom inside the circle)
-    hole_h = max(3, int(s * 0.09))
-    hole_w = max(2, int(s * 0.06))
-    gap    = max(2, int(s * 0.06))
-    strip_w = 3*hole_w + 2*gap
-    sx     = pin_cx - strip_w // 2
-    voff   = max(1, s // 20)
-    hc     = (30, 15, 0, 255)
-    for i in range(3):
-        hx = sx + i * (hole_w + gap)
-        d.rectangle([hx, inner_cy-hole_h-voff, hx+hole_w, inner_cy-voff], fill=hc)
-        d.rectangle([hx, inner_cy+voff,        hx+hole_w, inner_cy+hole_h+voff], fill=hc)
-
-    # White centre dot ("you are here")
-    dr = max(2, int(s * 0.11))
-    d.ellipse([pin_cx-dr, inner_cy-dr, pin_cx+dr, inner_cy+dr],
-              fill=(255, 255, 255, 235))
-    return img
-
-def _build_app_icon():
-    """Return a list of PIL images suitable for root.iconphoto()."""
-    return [_make_icon_image(sz) for sz in (16, 24, 32, 48)]
-
-def apply_window_icon(root):
-    """Attach the embedded icon to a Tk root window (works on Windows & Linux)."""
-    try:
-        images  = _build_app_icon()
-        tk_imgs = [ImageTk.PhotoImage(im) for im in images]
-        root._icon_refs = tk_imgs          # keep references alive
-        root.iconphoto(True, *tk_imgs)
-    except Exception:
-        pass   # never crash on icon failure
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PALETTE  (shared with GPX Ironer / Geocoder / Cache Editor)
@@ -245,13 +183,13 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(f"DashcamToGPX  {VERSION}")
-        apply_window_icon(root)
         root.configure(bg=C["bg"])
         root.geometry("1400x900")
         root.resizable(True, True)
 
-        self.stop_requested   = False
+        self.stop_requested    = False
         self.frame_data_points = []
+        self._completed_gpx_files = []   # accumulates every final GPX saved this session
 
         # ── ttk style ──────────────────────────────────────────────────────────
         sty = ttk.Style(root); sty.theme_use("clam")
@@ -295,6 +233,9 @@ class App:
         self.stop_btn = mk_btn(btn_f, "⏹  Stop & Save Now",
                                C["red"], self.request_stop, state="disabled")
         self.stop_btn.pack(fill="x", pady=2)
+        self.ironer_btn = mk_btn(btn_f, "✏️  Open in GPX Ironer",
+                                 C["blue"], self.open_in_ironer, state="disabled")
+        self.ironer_btn.pack(fill="x", pady=2)
 
         # — Timing ————————————————————————————————————————————————————————————
         sec_hdr(left_sidebar, "TIMING")
@@ -482,6 +423,93 @@ class App:
                       f"ETA: {eta_str}  {finish_str}")
         self.progress_label_var.set(label_text)
 
+    # ── GPX IRONER LAUNCHER ────────────────────────────────────────────────────
+    def _find_ironer(self):
+        for name in ("GPX_ironer.pyw", "GPX_Ironer.pyw",
+                     "gpx_ironer.pyw", "GPX_ironer.py", "GPX_Ironer.py"):
+            p = os.path.join(SCRIPT_DIR, name)
+            if os.path.exists(p):
+                return p
+        return None
+
+    def _launch_ironer_with(self, gpx_path):
+        ironer = self._find_ironer()
+        if ironer is None:
+            ironer = filedialog.askopenfilename(
+                title="Locate GPX_ironer.pyw",
+                filetypes=[("Python files", "*.py *.pyw")],
+                initialdir=SCRIPT_DIR)
+            if not ironer:
+                return
+        try:
+            _NO_WIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen([sys.executable, ironer, gpx_path],
+                             creationflags=_NO_WIN)
+            self.append_log(f"Opened in GPX Ironer: {os.path.basename(gpx_path)}")
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Launch error", f"Could not open GPX Ironer:\n{e}")
+
+    def open_in_ironer(self):
+        files = [f for f in self._completed_gpx_files if os.path.isfile(f)]
+        if not files:
+            from tkinter import messagebox
+            messagebox.showwarning("No GPX files", "No completed GPX files yet.")
+            return
+        if len(files) == 1:
+            self._launch_ironer_with(files[0])
+            return
+        # Multiple files — show picker dialog
+        self._show_ironer_picker(files)
+
+    def _show_ironer_picker(self, files):
+        d = tk.Toplevel(self.root)
+        d.title("Open in GPX Ironer")
+        d.configure(bg=C["bg"])
+        d.geometry("500x340")
+        d.grab_set()
+        d.resizable(False, True)
+
+        tk.Frame(d, bg=C["accent"], height=3).pack(fill="x")
+        tk.Label(d, text="SELECT GPX FILE TO OPEN",
+                 font=("Consolas", 10, "bold"), bg=C["bg"],
+                 fg=C["accent"]).pack(padx=16, pady=(14, 2), anchor="w")
+        tk.Label(d, text="Choose which extracted GPX to send to GPX Ironer:",
+                 font=("Consolas", 8), bg=C["bg"],
+                 fg=C["muted"]).pack(padx=16, anchor="w")
+        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=8)
+
+        # listbox
+        lf = tk.Frame(d, bg=C["accent"], padx=1, pady=1)
+        lf.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        li = tk.Frame(lf, bg=C["panel2"]); li.pack(fill="both", expand=True)
+        lsb = ttk.Scrollbar(li, orient="vertical"); lsb.pack(side="right", fill="y")
+        lb = tk.Listbox(li, yscrollcommand=lsb.set, font=("Consolas", 9),
+                        bg=C["panel2"], fg=C["text"],
+                        selectbackground=C["accent"], selectforeground="black",
+                        activestyle="none", relief="flat", borderwidth=0,
+                        selectmode="single")
+        lb.pack(fill="both", expand=True); lsb.config(command=lb.yview)
+
+        for fp in files:
+            lb.insert(tk.END, f"  📍 {os.path.basename(fp)}")
+        lb.selection_set(0)   # pre-select the first (most recent at top)
+
+        def _open():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showwarning("No selection",
+                                       "Please select a file.", parent=d)
+                return
+            chosen = files[sel[0]]
+            d.destroy()
+            self._launch_ironer_with(chosen)
+
+        bf = tk.Frame(d, bg=C["bg"]); bf.pack(fill="x", padx=16, pady=(0, 14))
+        mk_btn(bf, "✏️  Open in GPX Ironer", C["blue"], _open).pack(side="left", padx=(0, 6))
+        mk_btn(bf, "Cancel", C["dim"], d.destroy).pack(side="left")
+        tk.Frame(d, bg=C["accent"], height=3).pack(fill="x", side="bottom")
+
     def select_and_start(self):
         files = filedialog.askopenfilenames(
             title="Select videos",
@@ -490,6 +518,7 @@ class App:
         self.stop_requested = False
         self.start_btn.config(state="disabled", bg=C["dim"], fg=C["muted"])
         self.stop_btn.config(state="normal",    bg=C["red"], fg="white")
+        self._completed_gpx_files = []   # reset for each new batch
         threading.Thread(target=self.worker, args=(list(files),), daemon=True).start()
 
     def _save_provisional(self, raw_points, basename, current_sec, prev_provisional_path):
@@ -633,6 +662,9 @@ class App:
                 out_path = os.path.join(self.outdir, out_name)
                 write_gpx_latlon_time(raw_points, out_path)
                 self.root.after(0, lambda p=out_name: self.append_log(f"Saved final: {p}"))
+                # track for the Ironer picker
+                self._completed_gpx_files.append(out_path)
+                self.root.after(0, lambda: self.ironer_btn.config(state="normal"))
 
                 if last_provisional_path and os.path.isfile(last_provisional_path):
                     try:
@@ -643,11 +675,18 @@ class App:
                         self.root.after(0, lambda err=str(e):
                             self.append_log(f"Could not clean up last provisional: {err}"))
 
-        self.root.after(0, lambda: [
-            self.start_btn.config(state="normal", bg=C["green"], fg="white"),
-            self.stop_btn.config(state="disabled", bg=C["dim"],  fg=C["muted"]),
-            self.progress_label_var.set("Ready."),
-        ])
+        def _on_batch_done():
+            self.start_btn.config(state="normal", bg=C["green"], fg="white")
+            self.stop_btn.config(state="disabled", bg=C["dim"],  fg=C["muted"])
+            self.progress_label_var.set("Ready.")
+            # auto-open Ironer picker when processing is complete and files exist
+            if self._completed_gpx_files:
+                if len(self._completed_gpx_files) == 1:
+                    self._launch_ironer_with(self._completed_gpx_files[0])
+                else:
+                    self._show_ironer_picker(self._completed_gpx_files)
+
+        self.root.after(0, _on_batch_done)
 
     def show_frame(self, pil_image):
         w = self._vid_w
