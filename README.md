@@ -30,6 +30,10 @@ Dashcam video
      ▼
 [5] Towns Video          Generate a location-annotation video (road / town / flag overlay)
                          ready to composite over the original dashcam footage
+     │
+     ▼
+[6] Overlay Compositor   Finally places the overlay on the original video. 
+                         Position, cropping and timing are adjustable
 ```
 
 ---
@@ -135,7 +139,18 @@ Reads a geocoded GPX file and renders a black MP4 video that displays the road n
 - Render progress bar with ETA
 
 <img width="1755" height="934" alt="image" src="https://github.com/user-attachments/assets/c6b1f942-9b38-4622-a75f-be661a80c570" />
+---
 
+### 6 · Overlay Compositor  `overlay_compositor.pyw`
+
+Places the final overlay result over the original video
+
+**Key features**
+- Configurable size and cropping
+- Configurable positioning
+- Time offset editable
+
+<img width="1900" height="1020" alt="overlayer" src="https://github.com/user-attachments/assets/4b0a1a5e-386e-441d-86f3-d5bee8e0bd9e" />
 ---
 
 ## 🛠️ Installation
