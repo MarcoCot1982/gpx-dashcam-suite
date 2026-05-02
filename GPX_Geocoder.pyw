@@ -531,23 +531,84 @@ def toggle_pause_resume():
 
 filemenu.add_command(label="Pause Processing", command=toggle_pause_resume)
 
-def open_cache_editor():
+def _launch_cache_editor(db_path=None, gpx_path=None):
+    """Launch Cache_Editor.pyw, optionally pre-loading a DB and GPX file."""
     candidates = ["Cache_Editor.pyw","Cache_Editor.py","cache_editor.pyw","cache_editor.py"]
+    editor_path = None
     for c in candidates:
         p = os.path.join(SCRIPT_DIR, c)
         if os.path.exists(p):
-            try:
-                if sys.platform.startswith("win"): os.startfile(p)
-                else: threading.Thread(target=lambda: os.system(f'"{sys.executable}" "{p}"'), daemon=True).start()
-                return
-            except Exception: pass
-    path = filedialog.askopenfilename(title="Select Cache Editor", filetypes=[("Python files","*.py *.pyw")])
-    if path:
-        try:
-            if sys.platform.startswith("win"): os.startfile(path)
-            else: threading.Thread(target=lambda: os.system(f'"{sys.executable}" "{path}"'), daemon=True).start()
-        except Exception as e:
-            messagebox.showerror("Error", f"Cannot open Cache Editor: {e}")
+            editor_path = p; break
+    if editor_path is None:
+        editor_path = filedialog.askopenfilename(
+            title="Select Cache Editor", filetypes=[("Python files","*.py *.pyw")])
+    if not editor_path:
+        messagebox.showerror("Error", "Cannot find Cache_Editor.pyw")
+        return
+    cmd = [sys.executable, editor_path]
+    if db_path:  cmd += ["--db",  db_path]
+    if gpx_path: cmd += ["--gpx", gpx_path]
+    try:
+        _NW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(cmd, cwd=SCRIPT_DIR, creationflags=_NW)
+    except Exception as e:
+        messagebox.showerror("Error", f"Cannot open Cache Editor: {e}")
+
+def open_cache_editor():
+    _launch_cache_editor()
+
+def _show_done_dialog(output_paths):
+    """Styled completion dialog with an 'Open in Cache Editor' button."""
+    d = tk.Toplevel(root)
+    d.title("Processing Complete")
+    d.configure(bg=C["bg"])
+    d.resizable(False, False)
+    d.grab_set()
+
+    tk.Frame(d, bg=C["accent"], height=3).pack(fill="x")
+    tk.Label(d, text="PROCESSING COMPLETE",
+             font=("Consolas", 11, "bold"), bg=C["bg"], fg=C["accent"]).pack(
+             padx=20, pady=(14, 4), anchor="w")
+
+    n = len(output_paths)
+    summary = f"{n} file{'s' if n != 1 else ''} geocoded successfully."
+    tk.Label(d, text=summary, font=("Consolas", 9),
+             bg=C["bg"], fg=C["text"]).pack(padx=20, anchor="w", pady=(0, 8))
+
+    if output_paths:
+        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20, pady=(0, 8))
+        tk.Label(d, text="Output file(s):",
+                 font=("Consolas", 8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w")
+        for p in output_paths:
+            tk.Label(d, text="  " + os.path.basename(p),
+                     font=("Consolas", 8), bg=C["bg"], fg=C["text"]).pack(padx=20, anchor="w")
+
+    tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20, pady=8)
+    bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=20, pady=(0, 14))
+
+    def _open_editor():
+        gpx = output_paths[0] if output_paths else None
+        d.destroy()
+        _launch_cache_editor(db_path=CACHE_DB_PATH, gpx_path=gpx)
+
+    tk.Button(bf, text="📂  Open in Cache Editor",
+              bg=C["blue"], fg="white",
+              activebackground=C["blue"], activeforeground="white",
+              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
+              pady=4, padx=8, command=_open_editor).pack(side="left", padx=(0, 8))
+
+    tk.Button(bf, text="OK",
+              bg=C["dim"], fg=C["muted"],
+              activebackground=C["dim"], activeforeground="white",
+              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
+              pady=4, padx=8, command=d.destroy).pack(side="left")
+
+    tk.Frame(d, bg=C["accent"], height=3).pack(fill="x", side="bottom")
+    d.update_idletasks()
+    pw, ph = root.winfo_width(), root.winfo_height()
+    px, py = root.winfo_rootx(), root.winfo_rooty()
+    dw, dh = d.winfo_reqwidth(), d.winfo_reqheight()
+    d.geometry(f"{dw}x{dh}+{px+(pw-dw)//2}+{py+(ph-dh)//2}")
 
 filemenu.add_command(label="Open Cache Editor", command=open_cache_editor)
 filemenu.add_separator()
@@ -645,6 +706,17 @@ def refresh_cache_count_label():
         cache_count_label.config(text=f"Entries: {cnt:,}")
     except Exception:
         cache_count_label.config(text="Entries: ?")
+
+# NOTEPAD
+sec_hdr(left, "NOTEPAD")
+nf = tk.Frame(left, bg=C["accent"], padx=1, pady=1)
+nf.pack(fill="both", expand=True, padx=10, pady=(4,10))
+ni = tk.Frame(nf, bg=C["panel2"]); ni.pack(fill="both", expand=True)
+notepad = tk.Text(ni, bg=C["panel2"], fg=C["text"],
+                   insertbackground=C["text"], font=("Consolas",8),
+                   relief="flat", borderwidth=0, wrap="word",
+                   undo=True)
+notepad.pack(fill="both", expand=True, padx=4, pady=4)
 
 # ── RIGHT AREA ────────────────────────────────────────────────────────────────
 right = tk.Frame(body_frame, bg=C["bg"])
@@ -994,7 +1066,9 @@ def show_completion_dialog(completed_paths):
     def _launch(script, args=()):
         import subprocess
         try:
-            subprocess.Popen([sys.executable, script] + list(args), cwd=SCRIPT_DIR)
+            _NW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen([sys.executable, script] + list(args),
+                             cwd=SCRIPT_DIR, creationflags=_NW)
         except Exception as e:
             messagebox.showerror("Launch error", f"Cannot open script:\n{e}", parent=d)
 
@@ -1007,7 +1081,7 @@ def show_completion_dialog(completed_paths):
             script = filedialog.askopenfilename(
                 title="Select Cache Editor", filetypes=[("Python files","*.py *.pyw")], parent=d)
         if not script: return
-        _launch(script, ["--gpx", paths[0]])
+        _launch(script, ["--db", CACHE_DB_PATH, "--gpx", paths[0]])
 
     def _open_in_towns_video():
         paths = _get_selection(single=False)

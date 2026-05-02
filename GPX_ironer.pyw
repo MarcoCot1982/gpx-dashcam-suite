@@ -431,6 +431,9 @@ class IronApp:
         self._map_orig_press   = canvas.bind("<ButtonPress-1>")
         self._map_orig_motion  = canvas.bind("<B1-Motion>")
         self._map_orig_release = canvas.bind("<ButtonRelease-1>")
+        # Redraw point dots after pan and after tile redraws
+        canvas.bind("<ButtonRelease-1>", lambda e: self.root.after(80,  self._draw_point_dots), add="+")
+        canvas.bind("<Configure>",       lambda e: self.root.after(150, self._draw_point_dots), add="+")
         # Ctrl+Z undo, Ctrl+D drag toggle
         self.root.bind("<Control-z>", self.undo)
         self.root.bind("<Control-Z>", self.undo)
@@ -452,9 +455,51 @@ class IronApp:
     def _zoom_in(self):
         self._zoom_level[0] = min(self._zoom_level[0]+1, 19)
         self.map_widget.set_zoom(self._zoom_level[0])
+        self.root.after(200, self._draw_point_dots)   # redraw after tiles reload
+
     def _zoom_out(self):
         self._zoom_level[0] = max(self._zoom_level[0]-1, 2)
         self.map_widget.set_zoom(self._zoom_level[0])
+        self.root.after(200, self._draw_point_dots)   # redraw after tiles reload
+
+    _PT_DOT_TAG  = "pt_dot"
+
+    def _erase_point_dots(self):
+        try: self.map_widget.canvas.delete(self._PT_DOT_TAG)
+        except Exception: pass
+
+    def _latlon_to_canvas(self, lat, lon):
+        import math
+        mw    = self.map_widget
+        zoom  = round(mw.zoom)
+        n     = 2.0 ** zoom
+        lat_r = math.radians(lat)
+        tx    = (lon + 180.0) / 360.0 * n
+        ty    = (1.0 - math.log(math.tan(lat_r) + 1.0 / math.cos(lat_r)) / math.pi) / 2.0 * n
+        ul_x, ul_y = mw.upper_left_tile_pos
+        ts    = mw.tile_size
+        return (tx - ul_x) * ts, (ty - ul_y) * ts
+
+    def _draw_point_dots(self):
+        self._erase_point_dots()
+        idxs = getattr(self, "_draw_point_dots_idxs", None)
+        if not idxs or not self.points: return
+        canvas = self.map_widget.canvas
+        for i in idxs:
+            try:
+                x, y = self._latlon_to_canvas(self.points[i][0], self.points[i][1])
+                # white halo (outer ring)
+                canvas.create_oval(x-4, y-4, x+4, y+4,
+                                   fill="white", outline="white", width=0,
+                                   tags=self._PT_DOT_TAG)
+                # black centre dot
+                canvas.create_oval(x-2, y-2, x+2, y+2,
+                                   fill="black", outline="black", width=0,
+                                   tags=self._PT_DOT_TAG)
+            except Exception:
+                pass
+        # raise above tile images so dots are always visible
+        canvas.tag_raise(self._PT_DOT_TAG)
 
     def _toggle_drag_mode(self):
         self._drag_mode = not self._drag_mode
@@ -784,10 +829,16 @@ class IronApp:
 
         try: mark_f = int(self.marker_freq_var.get())
         except: mark_f = 10
+
+        # Draw labeled pins at the configured frequency
         if mark_f > 0:
             for i in draw_idxs:
                 if i % mark_f == 0:
                     self.map_widget.set_marker(self.points[i][0], self.points[i][1], text=str(i))
+
+        # Canvas dots for every visible point — drawn after tiles settle
+        self._draw_point_dots_idxs = list(draw_idxs)
+        self.root.after(120, self._draw_point_dots)
 
         # center map only when explicitly requested via _pending_center;
         # otherwise leave the map exactly where it is (tkintermapview does not
@@ -896,17 +947,125 @@ class IronApp:
             self.refresh_map_and_tree()
 
     def bulk_time_shift(self):
-        offset = simpledialog.askstring("Time shift", "Offset (HH:MM:SS):", initialvalue="01:00:00")
-        if not offset: return
-        try:
-            h,m,s = map(int, offset.split(":"))
-            delta  = timedelta(hours=h, minutes=m, seconds=s)
+        # find current first timestamp for context
+        first_ts = next((p[2] for p in self.points if p[2] is not None), None)
+        first_str = first_ts.strftime("%H:%M:%S") if first_ts else "unknown"
+
+        d = tk.Toplevel(self.root)
+        d.title("Shift Time")
+        d.configure(bg=C["bg"]); d.resizable(False, False)
+        tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
+        tk.Label(d, text="SHIFT TIMESTAMPS",
+                 font=("Consolas",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(
+                 padx=16, pady=(14,2), anchor="w")
+        tk.Label(d, text=f"First point timestamp: {first_str}   ·   Applies to all points.",
+                 font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w", pady=(0,10))
+        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=(0,10))
+
+        # mode radio buttons
+        dir_var = tk.StringVar(value="add")
+        df = tk.Frame(d, bg=C["bg"]); df.pack(padx=16, pady=(0,8), fill="x")
+        _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
+                    activeforeground=C["accent"], selectcolor=C["accent2"],
+                    font=("Consolas",9), anchor="w", relief="flat")
+        tk.Radiobutton(df, text="➕  Add time",         variable=dir_var, value="add",    **_rkw).pack(fill="x", pady=2)
+        tk.Radiobutton(df, text="➖  Deduct time",       variable=dir_var, value="deduct", **_rkw).pack(fill="x", pady=2)
+        tk.Radiobutton(df, text="🕐  Set start time",   variable=dir_var, value="setstart", **_rkw).pack(fill="x", pady=2)
+
+        # entry row — label changes depending on mode
+        ef = tk.Frame(d, bg=C["bg"]); ef.pack(padx=16, pady=(4,4))
+        entry_lbl = tk.Label(ef, text="Offset (HH:MM:SS):", font=("Consolas",9),
+                              bg=C["bg"], fg=C["text"], width=20, anchor="w")
+        entry_lbl.pack(side="left", padx=(0,8))
+        off_var = tk.StringVar(value="01:00:00")
+        off_e = ttk.Entry(ef, textvariable=off_var, width=12, font=("Consolas",10))
+        off_e.pack(side="left")
+        off_e.select_range(0, "end"); off_e.focus_set()
+
+        preview_lbl = tk.Label(d, text="", font=("Consolas",8), bg=C["bg"], fg=C["muted"])
+        preview_lbl.pack(padx=16, anchor="w", pady=(4,10))
+
+        def _update_label(*_):
+            mode = dir_var.get()
+            if mode == "setstart":
+                entry_lbl.config(text="New start (HH:MM:SS):")
+            else:
+                entry_lbl.config(text="Offset (HH:MM:SS):")
+            _preview()
+
+        def _preview(*_):
+            mode = dir_var.get()
+            raw  = off_var.get().strip()
+            try:
+                parts = list(map(int, raw.split(":")))
+                if len(parts) != 3: raise ValueError
+                h, m, s = parts
+                if not (0 <= m < 60 and 0 <= s < 60): raise ValueError
+                if mode == "add":
+                    preview_lbl.config(text=f"→ all timestamps +{h:02d}:{m:02d}:{s:02d}", fg=C["muted"])
+                elif mode == "deduct":
+                    preview_lbl.config(text=f"→ all timestamps −{h:02d}:{m:02d}:{s:02d}", fg=C["muted"])
+                else:  # setstart
+                    if first_ts is None:
+                        preview_lbl.config(text="no existing timestamps to anchor to", fg=C["red"])
+                        return
+                    from datetime import datetime as _dt
+                    new_start = first_ts.replace(hour=h, minute=m, second=s, microsecond=0)
+                    delta_s   = (new_start - first_ts).total_seconds()
+                    sign      = "+" if delta_s >= 0 else "−"
+                    dh, rem   = divmod(abs(int(delta_s)), 3600)
+                    dm, ds    = divmod(rem, 60)
+                    preview_lbl.config(
+                        text=f"→ start set to {h:02d}:{m:02d}:{s:02d}  "
+                             f"(shift {sign}{dh:02d}:{dm:02d}:{ds:02d})", fg=C["muted"])
+            except Exception:
+                preview_lbl.config(text="invalid — use HH:MM:SS", fg=C["red"])
+
+        off_var.trace_add("write", _preview)
+        dir_var.trace_add("write", _update_label)
+        _preview()
+
+        def _apply():
+            mode = dir_var.get()
+            raw  = off_var.get().strip()
+            try:
+                parts = list(map(int, raw.split(":")))
+                if len(parts) != 3: raise ValueError
+                h, m, s = parts
+                if not (0 <= m < 60 and 0 <= s < 60): raise ValueError
+            except Exception:
+                messagebox.showerror("Invalid input", "Use HH:MM:SS format.", parent=d)
+                return
+
+            if mode == "setstart":
+                if first_ts is None:
+                    messagebox.showerror("No timestamps", "No existing timestamps to shift from.", parent=d)
+                    return
+                new_start = first_ts.replace(hour=h, minute=m, second=s, microsecond=0)
+                delta = new_start - first_ts
+                status_msg = f"Start time set to {h:02d}:{m:02d}:{s:02d}."
+            else:
+                delta = timedelta(hours=h, minutes=m, seconds=s)
+                if mode == "deduct":
+                    delta = -delta
+                sign = "+" if mode == "add" else "−"
+                status_msg = f"Timestamps shifted {sign}{h:02d}:{m:02d}:{s:02d}."
+
             self._push_undo()
-            self.points = [(p[0], p[1], p[2]+delta if p[2] else None) for p in self.points]
+            self.points = [(p[0], p[1], p[2] + delta if p[2] else None) for p in self.points]
             self._mark_dirty()
-            self._set_status(f"Time shifted by {offset}.")
+            self._set_status(status_msg)
+            d.destroy()
             self.refresh_map_and_tree()
-        except: messagebox.showerror("Error","Invalid format. Use HH:MM:SS.")
+
+        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16)
+        bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=16, pady=12)
+        self._mk_btn(bf, "Apply", C["green"], _apply).pack(side="left", padx=(0,6))
+        self._mk_btn(bf, "Cancel", C["dim"], d.destroy).pack(side="left")
+        tk.Frame(d, bg=C["accent"], height=2).pack(fill="x", side="bottom")
+        d.bind("<Return>", lambda e: _apply())
+        d.bind("<Escape>", lambda e: d.destroy())
+        d.grab_set()
 
     def edit_gap(self):
         """Set a new time gap between 2 selected contiguous points,
@@ -1356,8 +1515,8 @@ class IronApp:
         d.configure(bg=C["bg"]); d.resizable(False, False)
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
 
-        def _row(lbl, val):
-            r = tk.Frame(d, bg=C["bg"]); r.pack(fill="x", padx=16, pady=4)
+        def _row(parent, lbl, val):
+            r = tk.Frame(parent, bg=C["bg"]); r.pack(fill="x", padx=16, pady=4)
             tk.Label(r, text=lbl, font=("Consolas",9), bg=C["bg"],
                      fg=C["muted"], width=6, anchor="w").pack(side="left")
             e = ttk.Entry(r, width=22, font=("Consolas",9)); e.insert(0, str(val)); e.pack(side="left")
@@ -1365,19 +1524,145 @@ class IronApp:
 
         tk.Label(d, text=f"Point  #{idx}", font=("Consolas",10,"bold"),
                  bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(12,4), anchor="w")
-        le  = _row("Lat", lat)
-        loe = _row("Lon", lon)
+        le  = _row(d, "Lat", lat)
+        loe = _row(d, "Lon", lon)
 
+        # ── timestamp section (only when point has no time) ───────────────────
+        new_time_result = [None]   # will hold a datetime if user fills it in
+
+        if t is None:
+            # find nearest previous point that has a timestamp
+            prev_idx = next((k for k in range(idx-1, -1, -1) if self.points[k][2] is not None), None)
+            prev_t   = self.points[prev_idx][2] if prev_idx is not None else None
+            prev_dist = (haversine(self.points[prev_idx][0], self.points[prev_idx][1], lat, lon)
+                         if prev_idx is not None else None)
+
+            tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=(6,0))
+            tk.Label(d, text="⚠  No timestamp — assign one:",
+                     font=("Consolas",8,"bold"), bg=C["bg"], fg=C["orange"]).pack(
+                     padx=16, pady=(6,2), anchor="w")
+
+            if prev_t:
+                tk.Label(d, text=f"Prev timestamped point: #{prev_idx}  →  {prev_t.strftime('%H:%M:%S')}",
+                         font=("Consolas",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,6))
+            else:
+                tk.Label(d, text="No previous timestamped point found.",
+                         font=("Consolas",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,6))
+
+            mode_var = tk.StringVar(value="absolute")
+            _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
+                        activeforeground=C["accent"], selectcolor=C["accent2"],
+                        font=("Consolas",8), anchor="w", relief="flat")
+            mf = tk.Frame(d, bg=C["bg"]); mf.pack(fill="x", padx=16)
+            tk.Radiobutton(mf, text="🕐  Absolute time  (HH:MM:SS)",
+                           variable=mode_var, value="absolute", **_rkw).pack(fill="x", pady=1)
+            rb_offset = tk.Radiobutton(mf, text="⏱  Offset from previous  (MM:SS)",
+                           variable=mode_var, value="offset", **_rkw)
+            rb_offset.pack(fill="x", pady=1)
+            rb_speed  = tk.Radiobutton(mf, text="⚡  Avg speed from previous  (kph)",
+                           variable=mode_var, value="speed", **_rkw)
+            rb_speed.pack(fill="x", pady=1)
+
+            # disable offset/speed if no previous timestamp
+            if prev_t is None:
+                rb_offset.config(state="disabled")
+                rb_speed.config(state="disabled")
+
+            # entry row below radios
+            ef = tk.Frame(d, bg=C["bg"]); ef.pack(fill="x", padx=16, pady=(6,0))
+            entry_lbl = tk.Label(ef, text="Time (HH:MM:SS):", font=("Consolas",8),
+                                 bg=C["bg"], fg=C["text"], width=24, anchor="w")
+            entry_lbl.pack(side="left")
+            ts_var = tk.StringVar(value=prev_t.strftime("%H:%M:%S") if prev_t else "00:00:00")
+            ts_e   = ttk.Entry(ef, textvariable=ts_var, width=14, font=("Consolas",9))
+            ts_e.pack(side="left")
+
+            preview_ts = tk.Label(d, text="", font=("Consolas",7), bg=C["bg"], fg=C["muted"])
+            preview_ts.pack(padx=16, anchor="w", pady=(2,6))
+
+            def _update_entry_label(*_):
+                mode = mode_var.get()
+                if mode == "absolute":
+                    entry_lbl.config(text="Time (HH:MM:SS):")
+                elif mode == "offset":
+                    entry_lbl.config(text="Offset (MM:SS):")
+                else:
+                    entry_lbl.config(text="Speed (kph):")
+                _preview_ts()
+
+            def _preview_ts(*_):
+                mode = mode_var.get()
+                raw  = ts_var.get().strip()
+                try:
+                    if mode == "absolute":
+                        parts = list(map(int, raw.split(":")))
+                        if len(parts) != 3: raise ValueError
+                        h, m, s = parts
+                        result = (prev_t or datetime.now()).replace(
+                            hour=h, minute=m, second=s, microsecond=0)
+                        preview_ts.config(text=f"→ {result.strftime('%H:%M:%S')}", fg=C["muted"])
+                        new_time_result[0] = result
+
+                    elif mode == "offset":
+                        parts = list(map(int, raw.split(":")))
+                        if len(parts) != 2: raise ValueError
+                        mm, ss = parts
+                        if not (0 <= ss < 60): raise ValueError
+                        result = prev_t + timedelta(minutes=mm, seconds=ss)
+                        preview_ts.config(text=f"→ {result.strftime('%H:%M:%S')}  (+{mm}:{ss:02d} from #{prev_idx})",
+                                          fg=C["muted"])
+                        new_time_result[0] = result
+
+                    else:  # speed
+                        kph = float(raw)
+                        if kph <= 0 or prev_dist is None: raise ValueError
+                        secs   = prev_dist / (kph / 3.6)
+                        result = prev_t + timedelta(seconds=secs)
+                        preview_ts.config(
+                            text=f"→ {result.strftime('%H:%M:%S')}  "
+                                 f"({prev_dist:.0f}m at {kph:.1f}kph = {secs:.0f}s)",
+                            fg=C["muted"])
+                        new_time_result[0] = result
+
+                except Exception:
+                    preview_ts.config(text="invalid input", fg=C["red"])
+                    new_time_result[0] = None
+
+            mode_var.trace_add("write", _update_entry_label)
+            ts_var.trace_add("write",   _preview_ts)
+            _preview_ts()
+
+        # ── save ──────────────────────────────────────────────────────────────
         bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=16, pady=10)
+
         def save():
             try:
-                self._push_undo()
-                self.points[idx] = (float(le.get()), float(loe.get()), t)
-                self._mark_dirty(); self.refresh_map_and_tree(); d.destroy()
-            except: messagebox.showerror("Error","Invalid lat/lon.", parent=d)
+                new_lat = float(le.get())
+                new_lon = float(loe.get())
+            except Exception:
+                messagebox.showerror("Error", "Invalid lat/lon.", parent=d); return
+
+            # determine final timestamp
+            if t is None:
+                final_t = new_time_result[0]
+                if final_t is None:
+                    if not messagebox.askyesno("No timestamp",
+                            "No valid timestamp entered.\nSave point without timestamp?", parent=d):
+                        return
+            else:
+                final_t = t   # preserve existing timestamp unchanged
+
+            self._push_undo()
+            self.points[idx] = (new_lat, new_lon, final_t)
+            self._mark_dirty()
+            self.refresh_map_and_tree()
+            d.destroy()
+
         self._mk_btn(bf, "Save", C["green"], save).pack(side="left", padx=(0,6))
         self._mk_btn(bf, "Cancel", C["dim"], d.destroy).pack(side="left")
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x", side="bottom")
+        d.bind("<Return>", lambda e: save())
+        d.bind("<Escape>", lambda e: d.destroy())
         d.grab_set()
 
 # ──────────────────────────────────────────────────────────────────────────────
