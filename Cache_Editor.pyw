@@ -224,6 +224,7 @@ class CacheEditor:
         self.focus_end            = None
         self.focus_path_obj       = None   # highlighted focused-segment path
         self.dot_markers          = []     # per-point dots shown in focus view
+        self._show_dots            = False  # toggled by sidebar button
         self._focus_dot_pts       = []     # (lat,lon) list for current focus dots
         self._dot_redraw_pending  = False  # debounce flag
         self.area_mode            = False
@@ -347,6 +348,14 @@ class CacheEditor:
                  font=("Consolas", 8), bg=C["panel"], fg=C["muted"]).pack(side="left")
         mk_btn(md_row, "Apply", C["dim"], self._apply_density,
                font=("Consolas", 8, "bold")).pack(side="left", padx=(6, 0))
+
+        # Dots toggle (OFF by default — can be slow on large tracks)
+        self._dots_btn = mk_btn(md_f, "· · ·  Show all points: OFF", C["dim"],
+                                self._toggle_show_dots, font=("Consolas", 8, "bold"))
+        self._dots_btn.pack(fill="x", pady=(6, 0))
+        tk.Label(md_f, text="Shows a dot at every point position. May be slow on large tracks.",
+                 font=("Consolas", 7), bg=C["panel"], fg=C["dim"],
+                 justify="left", wraplength=260).pack(anchor="w", pady=(2, 0))
 
         # — Map focus ————————————————————————————————————————————————————————
         sec_hdr(left, "MAP FOCUS")
@@ -994,6 +1003,15 @@ class CacheEditor:
 
     _PT_DOT_TAG = "ce_pt_dot"   # canvas tag for all point dots
 
+    def _toggle_show_dots(self):
+        self._show_dots = not self._show_dots
+        if self._show_dots:
+            self._dots_btn.config(text="· · ·  Show all points: ON",  bg=C["teal"])
+            self._schedule_canvas_dots()
+        else:
+            self._dots_btn.config(text="· · ·  Show all points: OFF", bg=C["dim"])
+            self._clear_canvas_dots()
+
     def _clear_canvas_dots(self):
         """Erase only our dots by tag — unaffected by tkintermapview's delete('all')."""
         try:
@@ -1005,6 +1023,7 @@ class CacheEditor:
         """Draw white-halo + teal-center dots at every focus point."""
         self._dot_redraw_pending = False
         self._clear_canvas_dots()
+        if not getattr(self, "_show_dots", False): return
         pts = getattr(self, "_focus_dot_pts", [])
         if not pts: return
         canvas = getattr(self.map_widget, "canvas", None)

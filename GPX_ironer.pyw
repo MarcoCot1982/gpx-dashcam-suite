@@ -10,7 +10,6 @@ Dark cinematic UI. Auto-saves a _temp file every 10 minutes after changes.
 
 import os, math, time, threading, sys
 from datetime import datetime, timedelta
-import requests
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -167,6 +166,7 @@ class IronApp:
         self.max_kph_bridge     = tk.StringVar(value="200")
         self.marker_freq_var    = tk.StringVar(value="100")
         self.color_interval_var = tk.StringVar(value="10")
+        self.show_dots_var      = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._schedule_autosave()
@@ -276,6 +276,10 @@ class IronApp:
         r3 = tk.Frame(vs, bg=C["panel"]); r3.pack(fill="x")
         self._lbl_entry(r3, "Color N",  self.color_interval_var, width=5)
         self._lbl_entry(r3, "Pin Freq", self.marker_freq_var,    width=5)
+        # Show all points toggle (OFF by default — can be slow on large tracks)
+        self._dots_btn = self._mk_btn(vs, "⬤  Show All Points: OFF", C["dim"],
+                                      self._toggle_show_dots, font=("Consolas",8,"bold"))
+        self._dots_btn.pack(fill="x", pady=(6,0))
 
         self._sec_hdr(left, "FOCUS")
         fc = tk.Frame(left, bg=C["panel"]); fc.pack(fill="x", padx=10, pady=6)
@@ -350,11 +354,10 @@ class IronApp:
         ba6 = tk.Frame(ba, bg=C["panel"]); ba6.pack(fill="x", pady=2)
         self._mk_btn(ba6, "⚡  Set Avg Speed", C["blue"], self.set_avg_speed).pack(fill="x")
 
-        self._sec_hdr(left, "FINALISE")
-        fn = tk.Frame(left, bg=C["panel"]); fn.pack(fill="x", padx=10, pady=6)
-        self._ele_btn = self._mk_btn(fn, "⛰  Add Altitude (DEM)", C["green"], self.add_elevation)
-        self._ele_btn.pack(fill="x", pady=2)
-        tk.Label(fn, text="Fetches SRTM 30m elevation for every\npoint · saves as _ele.gpx",
+        self._sec_hdr(left, "GEOCODER")
+        gc = tk.Frame(left, bg=C["panel"]); gc.pack(fill="x", padx=10, pady=6)
+        self._mk_btn(gc, "🌍  Open in Geocoder", C["green"], self._launch_geocoder_ui).pack(fill="x", pady=2)
+        tk.Label(gc, text="Launches GPX Geocoder on the\ncurrently loaded file",
                  font=("Consolas",7), bg=C["panel"], fg=C["dim"],
                  justify="left").pack(anchor="w", padx=2)
 
@@ -431,9 +434,9 @@ class IronApp:
         self._map_orig_press   = canvas.bind("<ButtonPress-1>")
         self._map_orig_motion  = canvas.bind("<B1-Motion>")
         self._map_orig_release = canvas.bind("<ButtonRelease-1>")
-        # Redraw point dots after pan and after tile redraws
-        canvas.bind("<ButtonRelease-1>", lambda e: self.root.after(80,  self._draw_point_dots), add="+")
-        canvas.bind("<Configure>",       lambda e: self.root.after(150, self._draw_point_dots), add="+")
+        # Redraw point dots after pan and after tile redraws (only when dots are enabled)
+        canvas.bind("<ButtonRelease-1>", lambda e: self.show_dots_var.get() and self.root.after(80,  self._draw_point_dots), add="+")
+        canvas.bind("<Configure>",       lambda e: self.show_dots_var.get() and self.root.after(150, self._draw_point_dots), add="+")
         # Ctrl+Z undo, Ctrl+D drag toggle
         self.root.bind("<Control-z>", self.undo)
         self.root.bind("<Control-Z>", self.undo)
@@ -455,12 +458,23 @@ class IronApp:
     def _zoom_in(self):
         self._zoom_level[0] = min(self._zoom_level[0]+1, 19)
         self.map_widget.set_zoom(self._zoom_level[0])
-        self.root.after(200, self._draw_point_dots)   # redraw after tiles reload
+        if self.show_dots_var.get():
+            self.root.after(200, self._draw_point_dots)
 
     def _zoom_out(self):
         self._zoom_level[0] = max(self._zoom_level[0]-1, 2)
         self.map_widget.set_zoom(self._zoom_level[0])
-        self.root.after(200, self._draw_point_dots)   # redraw after tiles reload
+        if self.show_dots_var.get():
+            self.root.after(200, self._draw_point_dots)
+
+    def _toggle_show_dots(self):
+        self.show_dots_var.set(not self.show_dots_var.get())
+        if self.show_dots_var.get():
+            self._dots_btn.config(text="⬤  Show All Points: ON",  bg=C["orange"])
+            self._draw_point_dots()
+        else:
+            self._dots_btn.config(text="⬤  Show All Points: OFF", bg=C["dim"])
+            self._erase_point_dots()
 
     _PT_DOT_TAG  = "pt_dot"
 
@@ -836,9 +850,12 @@ class IronApp:
                 if i % mark_f == 0:
                     self.map_widget.set_marker(self.points[i][0], self.points[i][1], text=str(i))
 
-        # Canvas dots for every visible point — drawn after tiles settle
+        # Canvas dots for every visible point — only when enabled (can be slow on large tracks)
         self._draw_point_dots_idxs = list(draw_idxs)
-        self.root.after(120, self._draw_point_dots)
+        if self.show_dots_var.get():
+            self.root.after(120, self._draw_point_dots)
+        else:
+            self._erase_point_dots()
 
         # center map only when explicitly requested via _pending_center;
         # otherwise leave the map exactly where it is (tkintermapview does not
@@ -1302,95 +1319,12 @@ class IronApp:
         d.bind("<Return>", lambda e: _apply())
         d.bind("<Escape>", lambda e: d.destroy())
         d.grab_set()
-    def add_elevation(self):
-        if not self.points:
-            messagebox.showwarning("No data", "Load a GPX file first."); return
-        if not self.source_path:
-            messagebox.showwarning("No file", "No source file path known."); return
+    # ── GEOCODER LAUNCH ────────────────────────────────────────────────────────
+    def _launch_geocoder_ui(self):
+        """Prompt for comment format, then launch GPX_Geocoder.pyw on the loaded file."""
+        if not self.source_path or not os.path.isfile(self.source_path):
+            messagebox.showwarning("No file", "Load a GPX file first."); return
 
-        total = len(self.points)
-        if not messagebox.askyesno("Add Altitude",
-            f"Fetch SRTM 30m elevation for {total:,} points?\n\n"
-            f"This calls api.opentopodata.org in batches of 100.\n"
-            f"Estimated time: ~{max(1, total//100)} second(s).\n\n"
-            f"Output will be saved as _ele.gpx in the same folder."):
-            return
-
-        self._ele_btn.config(state="disabled", text="⏳  Fetching…")
-
-        def _worker():
-            BATCH   = 100
-            DELAY   = 1.1          # seconds between requests (rate-limit: 1/s)
-            URL     = "https://api.opentopodata.org/v1/srtm30m"
-            elevs   = [None] * total
-            errors  = 0
-
-            for start in range(0, total, BATCH):
-                batch = self.points[start:start + BATCH]
-                locs  = "|".join(f"{p[0]},{p[1]}" for p in batch)
-                batch_n = start // BATCH + 1
-                total_batches = (total + BATCH - 1) // BATCH
-                pct = int(start / total * 100)
-                self.root.after(0, lambda s=start, tb=total_batches, bn=batch_n, pc=pct:
-                    self._set_status(
-                        f"Elevation batch {bn}/{tb}  ·  {pc}%  ·  {s:,}/{total:,} pts"))
-
-                try:
-                    r = requests.get(URL, params={"locations": locs}, timeout=15)
-                    r.raise_for_status()
-                    for j, result in enumerate(r.json().get("results", [])):
-                        elevs[start + j] = result.get("elevation")
-                except Exception as e:
-                    errors += 1
-                    self.root.after(0, lambda err=str(e):
-                        self._set_status(f"⚠ Batch error: {err}"))
-
-                if start + BATCH < total:
-                    time.sleep(DELAY)
-
-            # Build and save GPX with elevation
-            stem, ext = os.path.splitext(self.source_path)
-            # strip existing _ele suffix to avoid doubling
-            if stem.endswith("_ele"): stem = stem[:-4]
-            out_path = stem + "_ele" + ext
-
-            try:
-                gpx_out = gpxpy.gpx.GPX()
-                trk     = gpxpy.gpx.GPXTrack(); gpx_out.tracks.append(trk)
-                seg     = gpxpy.gpx.GPXTrackSegment(); trk.segments.append(seg)
-                for i, (lat, lon, t) in enumerate(self.points):
-                    pt = gpxpy.gpx.GPXTrackPoint(lat, lon, time=t)
-                    if elevs[i] is not None:
-                        pt.elevation = elevs[i]
-                    seg.points.append(pt)
-                with open(out_path, "w", encoding="utf-8") as fh:
-                    fh.write(gpx_out.to_xml())
-
-                filled  = sum(1 for e in elevs if e is not None)
-                missing = total - filled
-                msg = (f"Elevation added: {filled:,}/{total:,} points.\n"
-                       f"{'No errors.' if errors == 0 else f'{errors} batch error(s).'}\n"
-                       f"{'All points have elevation.' if missing == 0 else f'{missing} point(s) missing elevation.'}\n\n"
-                       f"Saved → {os.path.basename(out_path)}\n\n"
-                       f"Launching GPX Geocoder on this file…")
-                self.root.after(0, lambda m=msg, p=out_path: [
-                    self._set_status(f"✅ Saved → {os.path.basename(p)}"),
-                    messagebox.showinfo("Elevation done", m),
-                    self._launch_geocoder(p)
-                ])
-            except Exception as e:
-                self.root.after(0, lambda err=str(e): [
-                    self._set_status(f"❌ Save failed: {err}"),
-                    messagebox.showerror("Save error", f"Could not save file:\n{err}")
-                ])
-
-            self.root.after(0, lambda: self._ele_btn.config(
-                state="normal", text="⛰  Add Altitude (DEM)"))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _launch_geocoder(self, gpx_path):
-        """Prompt for comment format, then launch GPX_Geocoder.pyw with file + format choice."""
         candidates = ["GPX_Geocoder.pyw", "GPX_geocoder.pyw",
                       "gpx_geocoder.pyw", "GPX_Geocoder.py"]
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1401,14 +1335,11 @@ class IronApp:
                 geocoder_path = p; break
 
         if not geocoder_path:
-            messagebox.showwarning(
-                "Geocoder not found",
+            messagebox.showwarning("Geocoder not found",
                 "GPX_Geocoder.pyw was not found in the same folder.\n"
-                f"Looking in: {script_dir}\n\n"
-                "Open it manually and load the _ele.gpx file.")
-            return
+                f"Looking in: {script_dir}"); return
 
-        # ── comment format dialog ─────────────────────────────────────────────
+        # comment format dialog
         d = tk.Toplevel(self.root)
         d.title("Geocoder — comment format")
         d.configure(bg=C["bg"]); d.resizable(False, False)
@@ -1421,10 +1352,9 @@ class IronApp:
         tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
 
         fmt_var = tk.IntVar(value=2)
-        _rkw = dict(bg=C["bg"], fg=C["text"],
-                    activebackground=C["bg"], activeforeground=C["accent"],
-                    selectcolor=C["accent2"], font=("Consolas",9),
-                    anchor="w", relief="flat")
+        _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
+                    activeforeground=C["accent"], selectcolor=C["accent2"],
+                    font=("Consolas",9), anchor="w", relief="flat")
         rf = tk.Frame(d, bg=C["bg"]); rf.pack(fill="x", padx=20, pady=10)
         tk.Radiobutton(rf, text="Road, Town",
                        variable=fmt_var, value=1, **_rkw).pack(fill="x", pady=2)
@@ -1435,12 +1365,8 @@ class IronApp:
 
         chosen = [None]
 
-        def _ok():
-            chosen[0] = fmt_var.get()
-            d.destroy()
-
-        def _cancel():
-            d.destroy()
+        def _ok():   chosen[0] = fmt_var.get(); d.destroy()
+        def _cancel(): d.destroy()
 
         tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
         bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=20, pady=12)
@@ -1451,24 +1377,19 @@ class IronApp:
         d.bind("<Escape>", lambda e: _cancel())
         self.root.wait_window(d)
 
-        if chosen[0] is None:
-            return   # user cancelled
+        if chosen[0] is None: return
 
-        # ── launch ────────────────────────────────────────────────────────────
         try:
             import subprocess
             _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(
-                [sys.executable, geocoder_path, gpx_path, str(chosen[0])],
-                cwd=script_dir,
-                creationflags=_NO_WINDOW
-            )
+                [sys.executable, geocoder_path, self.source_path, str(chosen[0])],
+                cwd=script_dir, creationflags=_NO_WINDOW)
             fmt_names = {1: "Road, Town", 2: "Road, Town (Province)", 3: "Road|Town|Province|Country"}
             self._set_status(
-                f"Geocoder launched · {os.path.basename(gpx_path)} · format: {fmt_names[chosen[0]]}")
+                f"Geocoder launched · {os.path.basename(self.source_path)} · {fmt_names[chosen[0]]}")
         except Exception as e:
-            messagebox.showerror("Launch error",
-                f"Could not launch GPX_Geocoder.pyw:\n{e}")
+            messagebox.showerror("Launch error", f"Could not launch GPX_Geocoder.pyw:\n{e}")
 
     # ── TREE INTERACTION ───────────────────────────────────────────────────────
     def center_on_selected(self):

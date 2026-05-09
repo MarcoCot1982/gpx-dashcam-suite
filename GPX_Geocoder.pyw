@@ -49,6 +49,10 @@ TENERIFE_CENTER     = (28.2916, -16.6291)
 PHOTON_ENDPOINT  = "https://photon.komoot.io/reverse"
 PHOTON_MIN_DELAY = 1.3
 
+ELEVATION_URL   = "https://api.opentopodata.org/v1/srtm30m"
+ELEVATION_BATCH = 100
+ELEVATION_DELAY = 1.1   # seconds between requests (rate-limit: 1 req/s)
+
 NOMINATIM_USER_AGENT = f"GPXGeocoder/{VERSION} - {CONTACT}"
 NOMINATIM_TIMEOUT    = 10
 geolocator        = Nominatim(user_agent=NOMINATIM_USER_AGENT, timeout=NOMINATIM_TIMEOUT)
@@ -202,6 +206,50 @@ def cache_count(conn: sqlite3.Connection) -> int:
     cur.execute("SELECT COUNT(*) FROM geocode_cache")
     r = cur.fetchone()
     return r[0] if r else 0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Elevation helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def gpx_has_elevation(gpx_points) -> bool:
+    """Return True if at least one point already carries elevation data."""
+    return any(pt.elevation is not None for pt in gpx_points)
+
+def fetch_elevation(gpx_points, overwrite=True, status_cb=None, stop_check=None):
+    """
+    Fetch SRTM 30m elevation from opentopodata.org and apply to gpx_points in-place.
+    overwrite=False leaves points that already have elevation untouched.
+    Returns (filled_count, error_count).
+    """
+    total  = len(gpx_points)
+    filled = 0
+    errors = 0
+    for start in range(0, total, ELEVATION_BATCH):
+        if stop_check and stop_check():
+            break
+        batch   = gpx_points[start:start + ELEVATION_BATCH]
+        indices = [i for i, pt in enumerate(batch)
+                   if overwrite or pt.elevation is None]
+        if not indices:
+            continue
+        locs          = "|".join(f"{batch[i].latitude},{batch[i].longitude}" for i in indices)
+        batch_n       = start // ELEVATION_BATCH + 1
+        total_batches = (total + ELEVATION_BATCH - 1) // ELEVATION_BATCH
+        pct           = int(start / total * 100)
+        if status_cb:
+            status_cb(batch_n, total_batches, pct, start, total)
+        try:
+            r = requests.get(ELEVATION_URL, params={"locations": locs}, timeout=15)
+            r.raise_for_status()
+            for k, result in enumerate(r.json().get("results", [])):
+                ele = result.get("elevation")
+                if ele is not None:
+                    batch[indices[k]].elevation = ele
+                    filled += 1
+        except Exception:
+            errors += 1
+        if start + ELEVATION_BATCH < total:
+            time.sleep(ELEVATION_DELAY)
+    return filled, errors
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -531,84 +579,23 @@ def toggle_pause_resume():
 
 filemenu.add_command(label="Pause Processing", command=toggle_pause_resume)
 
-def _launch_cache_editor(db_path=None, gpx_path=None):
-    """Launch Cache_Editor.pyw, optionally pre-loading a DB and GPX file."""
+def open_cache_editor():
     candidates = ["Cache_Editor.pyw","Cache_Editor.py","cache_editor.pyw","cache_editor.py"]
-    editor_path = None
     for c in candidates:
         p = os.path.join(SCRIPT_DIR, c)
         if os.path.exists(p):
-            editor_path = p; break
-    if editor_path is None:
-        editor_path = filedialog.askopenfilename(
-            title="Select Cache Editor", filetypes=[("Python files","*.py *.pyw")])
-    if not editor_path:
-        messagebox.showerror("Error", "Cannot find Cache_Editor.pyw")
-        return
-    cmd = [sys.executable, editor_path]
-    if db_path:  cmd += ["--db",  db_path]
-    if gpx_path: cmd += ["--gpx", gpx_path]
-    try:
-        _NW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(cmd, cwd=SCRIPT_DIR, creationflags=_NW)
-    except Exception as e:
-        messagebox.showerror("Error", f"Cannot open Cache Editor: {e}")
-
-def open_cache_editor():
-    _launch_cache_editor()
-
-def _show_done_dialog(output_paths):
-    """Styled completion dialog with an 'Open in Cache Editor' button."""
-    d = tk.Toplevel(root)
-    d.title("Processing Complete")
-    d.configure(bg=C["bg"])
-    d.resizable(False, False)
-    d.grab_set()
-
-    tk.Frame(d, bg=C["accent"], height=3).pack(fill="x")
-    tk.Label(d, text="PROCESSING COMPLETE",
-             font=("Consolas", 11, "bold"), bg=C["bg"], fg=C["accent"]).pack(
-             padx=20, pady=(14, 4), anchor="w")
-
-    n = len(output_paths)
-    summary = f"{n} file{'s' if n != 1 else ''} geocoded successfully."
-    tk.Label(d, text=summary, font=("Consolas", 9),
-             bg=C["bg"], fg=C["text"]).pack(padx=20, anchor="w", pady=(0, 8))
-
-    if output_paths:
-        tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20, pady=(0, 8))
-        tk.Label(d, text="Output file(s):",
-                 font=("Consolas", 8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w")
-        for p in output_paths:
-            tk.Label(d, text="  " + os.path.basename(p),
-                     font=("Consolas", 8), bg=C["bg"], fg=C["text"]).pack(padx=20, anchor="w")
-
-    tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20, pady=8)
-    bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=20, pady=(0, 14))
-
-    def _open_editor():
-        gpx = output_paths[0] if output_paths else None
-        d.destroy()
-        _launch_cache_editor(db_path=CACHE_DB_PATH, gpx_path=gpx)
-
-    tk.Button(bf, text="📂  Open in Cache Editor",
-              bg=C["blue"], fg="white",
-              activebackground=C["blue"], activeforeground="white",
-              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
-              pady=4, padx=8, command=_open_editor).pack(side="left", padx=(0, 8))
-
-    tk.Button(bf, text="OK",
-              bg=C["dim"], fg=C["muted"],
-              activebackground=C["dim"], activeforeground="white",
-              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
-              pady=4, padx=8, command=d.destroy).pack(side="left")
-
-    tk.Frame(d, bg=C["accent"], height=3).pack(fill="x", side="bottom")
-    d.update_idletasks()
-    pw, ph = root.winfo_width(), root.winfo_height()
-    px, py = root.winfo_rootx(), root.winfo_rooty()
-    dw, dh = d.winfo_reqwidth(), d.winfo_reqheight()
-    d.geometry(f"{dw}x{dh}+{px+(pw-dw)//2}+{py+(ph-dh)//2}")
+            try:
+                if sys.platform.startswith("win"): os.startfile(p)
+                else: threading.Thread(target=lambda: os.system(f'"{sys.executable}" "{p}"'), daemon=True).start()
+                return
+            except Exception: pass
+    path = filedialog.askopenfilename(title="Select Cache Editor", filetypes=[("Python files","*.py *.pyw")])
+    if path:
+        try:
+            if sys.platform.startswith("win"): os.startfile(path)
+            else: threading.Thread(target=lambda: os.system(f'"{sys.executable}" "{path}"'), daemon=True).start()
+        except Exception as e:
+            messagebox.showerror("Error", f"Cannot open Cache Editor: {e}")
 
 filemenu.add_command(label="Open Cache Editor", command=open_cache_editor)
 filemenu.add_separator()
@@ -879,6 +866,52 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
         preview_text.see(tk.END)
         return
 
+    # ── Phase 1: Elevation ────────────────────────────────────────────────────
+    overwrite_ele = True
+    if gpx_has_elevation(all_pts):
+        # Ask on the main thread via a thread-safe event
+        _answer = [None]
+        _evt    = threading.Event()
+        def _ask_ele():
+            ans = messagebox.askyesnocancel(
+                "Elevation data found",
+                f"{basename}\nalready contains elevation data.\n\n"
+                f"Yes  →  overwrite with fresh SRTM data\n"
+                f"No   →  keep existing elevation\n"
+                f"Cancel  →  skip elevation entirely",
+                parent=root)
+            _answer[0] = ans   # True=overwrite, False=keep, None=skip
+            _evt.set()
+        root.after(0, _ask_ele)
+        _evt.wait()
+        if _answer[0] is None:        # Cancel → skip elevation phase
+            overwrite_ele = None
+        elif _answer[0] is False:     # No → keep existing
+            overwrite_ele = False
+
+    if overwrite_ele is not None:     # None means skip entirely
+        preview_text.insert(tk.END, f"⛰  Fetching elevation for {total:,} points…\n")
+        preview_text.see(tk.END)
+
+        def _ele_status(batch_n, total_batches, pct, done, tot):
+            status_label.config(
+                text=f"⛰  Elevation batch {batch_n}/{total_batches}  ·  {pct}%  ·  {done:,}/{tot:,} pts")
+            point_counter_label.config(text=f"{done:,}  /  {tot:,}  pts")
+            progress_var.set(pct * 0.5)   # elevation uses first 50% of the bar
+
+        filled, errors = fetch_elevation(
+            all_pts,
+            overwrite=overwrite_ele,
+            status_cb=_ele_status,
+            stop_check=lambda: stop_event.is_set())
+
+        preview_text.insert(tk.END,
+            f"⛰  Elevation done — {filled:,}/{total:,} pts"
+            f"{'' if errors == 0 else f'  ({errors} error(s))'}\n\n")
+        preview_text.see(tk.END)
+        progress_var.set(50)
+
+    # ── Phase 2: Reverse geocoding ────────────────────────────────────────────
     # determine output path
     stem = os.path.splitext(basename)[0]
     if dest_choice_value == 1:
@@ -931,8 +964,8 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
         remain   = (total - i - 1) * per_pt
         eta_str  = f"ETA {int(remain//60)}:{int(remain%60):02d}" if remain > 0 else ""
 
-        # progress
-        pct = ((i + 1) / total) * 100
+        # progress — geocoding occupies 50–100% of the bar (0–50% was elevation)
+        pct = 50 + ((i + 1) / total) * 50
         try:
             progress_var.set(pct)
             eta_label.config(text=eta_str)
@@ -1066,9 +1099,7 @@ def show_completion_dialog(completed_paths):
     def _launch(script, args=()):
         import subprocess
         try:
-            _NW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            subprocess.Popen([sys.executable, script] + list(args),
-                             cwd=SCRIPT_DIR, creationflags=_NW)
+            subprocess.Popen([sys.executable, script] + list(args), cwd=SCRIPT_DIR)
         except Exception as e:
             messagebox.showerror("Launch error", f"Cannot open script:\n{e}", parent=d)
 
@@ -1081,7 +1112,7 @@ def show_completion_dialog(completed_paths):
             script = filedialog.askopenfilename(
                 title="Select Cache Editor", filetypes=[("Python files","*.py *.pyw")], parent=d)
         if not script: return
-        _launch(script, ["--db", CACHE_DB_PATH, "--gpx", paths[0]])
+        _launch(script, ["--gpx", paths[0]])
 
     def _open_in_towns_video():
         paths = _get_selection(single=False)
