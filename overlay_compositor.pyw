@@ -205,10 +205,16 @@ class CompositorApp:
         self.crop           = None   # (cx, cy, cw, ch) in overlay pixels, or None
 
         # crop-drag state
-        self._crop_drag_start = None
-        self._crop_rect_id    = None
-        self._ov_canvas_scale  = 1.0    # overlay-pixel → canvas-pixel
-        self._ov_canvas_offset = (0, 0) # top-left of image inside canvas
+        self._crop_drag_start  = None
+        self._crop_rect_id     = None
+        self._ov_canvas_scale  = 1.0
+        self._ov_canvas_offset = (0, 0)
+
+        # drag-to-position state (on composite preview canvas)
+        self._comp_drag_active  = False
+        self._comp_drag_last    = None   # (canvas_x, canvas_y) of last mouse event
+        self._comp_canvas_scale  = 1.0   # video-pixel → canvas-pixel ratio
+        self._comp_canvas_offset = (0, 0)
 
         # render
         self._render_proc   = None
@@ -259,8 +265,11 @@ class CompositorApp:
         sec_hdr(left, "OVERLAY CROP")
         cf = tk.Frame(left, bg=C["panel"]); cf.pack(fill="x", padx=10, pady=6)
         mk_lbl(cf, "Click & drag on the right panel →").pack(anchor="w", pady=(0, 4))
-        mk_btn(cf, "✕  Reset (full frame)", C["dim"],
-               self.reset_crop, font=("Consolas", 8, "bold")).pack(fill="x")
+        cr2 = tk.Frame(cf, bg=C["panel"]); cr2.pack(fill="x", pady=(0, 2))
+        mk_btn(cr2, "⚡ Auto-crop to text", C["orange"],
+               self._auto_crop, font=("Consolas", 8, "bold")).pack(side="left", expand=True, fill="x", padx=(0, 2))
+        mk_btn(cr2, "✕ Reset", C["dim"],
+               self.reset_crop, font=("Consolas", 8, "bold")).pack(side="left")
         self._crop_lbl = mk_lbl(cf, "Full frame — no crop active", fg=C["muted"])
         self._crop_lbl.pack(anchor="w", pady=(4, 0))
 
@@ -295,24 +304,52 @@ class CompositorApp:
             b.grid(row=r, column=c, padx=2, pady=2, sticky="nsew")
             self._pos_btns[val] = b
 
-        cxy = tk.Frame(pf, bg=C["panel"]); cxy.pack(fill="x", pady=(8, 0))
-        mk_lbl(cxy, "Custom X:").pack(side="left")
+        # drag-to-position toggle — drag the overlay on the composite preview
+        drag_row = tk.Frame(pf, bg=C["panel"]); drag_row.pack(fill="x", pady=(6, 0))
+        self._drag_pos_btn = mk_btn(drag_row, "✋  Drag to position: OFF", C["dim"],
+                                     self._toggle_drag_pos, font=("Consolas", 8, "bold"))
+        self._drag_pos_btn.pack(fill="x")
+        mk_lbl(pf, "drag overlay on composite preview ↑").pack(anchor="w", pady=(2, 0))
+
+        cxy = tk.Frame(pf, bg=C["panel"]); cxy.pack(fill="x", pady=(6, 0))
+        mk_lbl(cxy, "X:").pack(side="left")
         self._pos_x_var = tk.StringVar()
         mk_entry(cxy, self._pos_x_var, width=6).pack(side="left", padx=(2, 6))
         mk_lbl(cxy, "Y:").pack(side="left")
         self._pos_y_var = tk.StringVar()
         mk_entry(cxy, self._pos_y_var, width=6).pack(side="left", padx=2)
-        mk_lbl(cxy, "(overrides grid)").pack(side="left", padx=4)
+        mk_lbl(cxy, "(grid sets preset)").pack(side="left", padx=4)
         self._pos_x_var.trace_add("write", lambda *_: self._refresh_composite())
         self._pos_y_var.trace_add("write", lambda *_: self._refresh_composite())
 
         # — Timing ——————————————————————————————————————————————————————————————
-        sec_hdr(left, "START OFFSET IN BASE VIDEO")
+        sec_hdr(left, "TIMING")
         tf2 = tk.Frame(left, bg=C["panel"]); tf2.pack(fill="x", padx=10, pady=6)
+
         mk_lbl(tf2, "Overlay starts at (HH:MM:SS):").pack(anchor="w")
         self._offset_var = tk.StringVar(value="00:00:00")
-        mk_entry(tf2, self._offset_var, width=14).pack(anchor="w", pady=(2, 2))
-        mk_lbl(tf2, "00:00:00 = starts with the video").pack(anchor="w")
+        mk_entry(tf2, self._offset_var, width=14).pack(anchor="w", pady=(2, 6))
+
+        mk_lbl(tf2, "Base video output range:").pack(anchor="w")
+        br2 = tk.Frame(tf2, bg=C["panel"]); br2.pack(fill="x", pady=(2, 0))
+        mk_lbl(br2, "From:").pack(side="left")
+        self._base_start_var = tk.StringVar(value="00:00:00")
+        mk_entry(br2, self._base_start_var, width=9).pack(side="left", padx=(2, 6))
+        mk_lbl(br2, "To:").pack(side="left")
+        self._base_end_var = tk.StringVar(value="")
+        mk_entry(br2, self._base_end_var, width=9).pack(side="left", padx=2)
+        mk_lbl(tf2, "blank To = full duration", fg=C["dim"]).pack(anchor="w", pady=(2, 6))
+
+        mk_lbl(tf2, "When range is active:").pack(anchor="w")
+        self._range_mode_var = tk.IntVar(value=1)
+        _rkw2 = dict(bg=C["panel"], fg=C["text"],
+                     activebackground=C["panel"], activeforeground=C["accent"],
+                     selectcolor=C["accent2"], font=("Consolas", 8),
+                     anchor="w", relief="flat")
+        tk.Radiobutton(tf2, text="Full video  (label only in range)",
+                       variable=self._range_mode_var, value=1, **_rkw2).pack(fill="x", pady=1)
+        tk.Radiobutton(tf2, text="Trimmed  (labeled section only)",
+                       variable=self._range_mode_var, value=2, **_rkw2).pack(fill="x", pady=1)
 
         # — Output —————————————————————————————————————————————————————————————
         sec_hdr(left, "OUTPUT")
@@ -349,13 +386,16 @@ class CompositorApp:
         left_col = tk.Frame(top, bg=C["bg"])
         left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         lh = tk.Frame(left_col, bg=C["bg"]); lh.pack(fill="x", pady=(0, 4))
-        tk.Label(lh, text="COMPOSITE PREVIEW",
+        tk.Label(lh, text="COMPOSITE PREVIEW  —  enable drag to reposition overlay",
                  font=("Consolas", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         base_border = tk.Frame(left_col, bg=C["accent"], padx=2, pady=2)
         base_border.pack(fill="both", expand=True)
         self._comp_canvas = tk.Canvas(base_border, bg="black", highlightthickness=0)
         self._comp_canvas.pack(fill="both", expand=True)
-        self._comp_canvas.bind("<Configure>", lambda e: self._refresh_composite())
+        self._comp_canvas.bind("<Configure>",      lambda e: self._refresh_composite())
+        self._comp_canvas.bind("<ButtonPress-1>",   self._drag_pos_press)
+        self._comp_canvas.bind("<B1-Motion>",       self._drag_pos_motion)
+        self._comp_canvas.bind("<ButtonRelease-1>", self._drag_pos_release)
 
         # overlay crop selector
         right_col = tk.Frame(top, bg=C["bg"])
@@ -576,10 +616,14 @@ class CompositorApp:
             if cw < 4 or ch < 4: return
             scale   = min(cw / comp.width, ch / comp.height)
             nw      = int(comp.width * scale); nh = int(comp.height * scale)
+            img_ox  = (cw - nw) // 2;         img_oy = (ch - nh) // 2
+            # store for drag-to-position coordinate conversion
+            self._comp_canvas_scale  = scale
+            self._comp_canvas_offset = (img_ox, img_oy)
             thumb   = comp.resize((nw, nh), Image.LANCZOS)
             self._comp_tk = ImageTk.PhotoImage(thumb)
             c.delete("all")
-            c.create_image((cw - nw) // 2, (ch - nh) // 2, anchor="nw", image=self._comp_tk)
+            c.create_image(img_ox, img_oy, anchor="nw", image=self._comp_tk)
         except Exception:
             pass
 
@@ -625,7 +669,11 @@ class CompositorApp:
         return d
 
     def _build_ffmpeg_cmd(self, output_path):
-        offset_s = parse_hms(self._offset_var.get())
+        offset_s      = parse_hms(self._offset_var.get())
+        base_start_s  = parse_hms(self._base_start_var.get())
+        base_end_raw  = self._base_end_var.get().strip()
+        base_end_s    = parse_hms(base_end_raw) if base_end_raw else None
+        range_mode    = self._range_mode_var.get()   # 1=full, 2=trimmed
 
         # crop parameters in overlay pixels
         if self.crop:
@@ -645,27 +693,76 @@ class CompositorApp:
             ox = max(0, min(ox, self.base_info[0] - sw))
             oy = max(0, min(oy, self.base_info[1] - sh))
 
-        # detect alpha (WebM/VP9) vs opaque overlay
+        # alpha handling
         is_webm = self.overlay_path.lower().endswith(".webm")
         fmt_opt = "format=auto" if is_webm else "format=rgb"
-
         crop_f  = f"crop={vcw}:{vch}:{vcx}:{vcy}"
-        scale_f = f"scale={sw}:{sh}"
+        scale_f = f"scale={sw}:{sh},format=rgba" if is_webm else f"scale={sw}:{sh}"
 
-        filter_complex = (
-            f"[1:v]{crop_f},{scale_f}[ov];"
-            f"[0:v][ov]overlay={ox}:{oy}:{fmt_opt}[out]"
-        )
+        cmd = ["ffmpeg", "-y"]
 
-        # -itsoffset shifts the overlay input's timestamps so it starts at offset_s
-        cmd = ["ffmpeg", "-y",
-               "-i", self.base_path]
-        if offset_s > 0:
-            cmd += ["-itsoffset", f"{offset_s:.3f}"]
-        cmd += ["-i", self.overlay_path,
-                "-filter_complex", filter_complex,
-                "-map", "[out]",
-                "-map", "0:a?",
+        if range_mode == 2:
+            # ── TRIMMED MODE ──────────────────────────────────────────────────
+            # Output only the range [base_start_s, base_end_s] of the base video.
+            # Adjust overlay offset relative to the trimmed clip start.
+            if base_start_s > 0:
+                cmd += ["-ss", f"{base_start_s:.3f}"]
+            cmd += ["-i", self.base_path]
+            if base_end_s is not None:
+                cmd += ["-to", f"{base_end_s - base_start_s:.3f}"]
+
+            # Effective overlay offset within the trimmed clip
+            eff_offset = offset_s - base_start_s
+            if eff_offset >= 0:
+                # overlay starts after clip start — delay it
+                if eff_offset > 0:
+                    cmd += ["-itsoffset", f"{eff_offset:.3f}"]
+                cmd += ["-i", self.overlay_path]
+            else:
+                # overlay started before trim point — skip into it
+                cmd += ["-ss", f"{-eff_offset:.3f}", "-i", self.overlay_path]
+
+            filter_complex = (
+                f"[1:v]{crop_f},{scale_f}[ov];"
+                f"[0:v][ov]overlay={ox}:{oy}:{fmt_opt}[out]"
+            )
+
+        else:
+            # ── FULL VIDEO MODE ───────────────────────────────────────────────
+            # Output the full base video; overlay is visible only within its
+            # natural window. If a range is set, restrict visibility with enable.
+            cmd += ["-i", self.base_path]
+            if offset_s > 0:
+                cmd += ["-itsoffset", f"{offset_s:.3f}"]
+            cmd += ["-i", self.overlay_path]
+
+            ov_dur = self.overlay_info[3] if self.overlay_info else 0
+            en_start = offset_s
+            en_end   = offset_s + ov_dur
+            # further restrict to the user-supplied range if set
+            if base_start_s > 0:
+                en_start = max(en_start, base_start_s)
+            if base_end_s is not None:
+                en_end   = min(en_end, base_end_s)
+
+            # Only add enable expression if there is an actual restriction
+            needs_enable = (base_start_s > 0 or base_end_s is not None
+                            or offset_s > 0)
+            if needs_enable:
+                # escape commas so ffmpeg doesn't split the filter at them
+                enable_expr = f"enable='between(t\\,{en_start:.3f}\\,{en_end:.3f})'"
+                filter_complex = (
+                    f"[1:v]{crop_f},{scale_f}[ov];"
+                    f"[0:v][ov]overlay={ox}:{oy}:{fmt_opt}:{enable_expr}[out]"
+                )
+            else:
+                filter_complex = (
+                    f"[1:v]{crop_f},{scale_f}[ov];"
+                    f"[0:v][ov]overlay={ox}:{oy}:{fmt_opt}[out]"
+                )
+
+        cmd += ["-filter_complex", filter_complex,
+                "-map", "[out]", "-map", "0:a?",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-c:a", "copy",
                 output_path]
@@ -764,6 +861,102 @@ class CompositorApp:
                 pass
             t = min(t + interval, total_dur if total_dur else t + interval)
             stop_event.wait(interval)
+
+    # ── DRAG TO POSITION ──────────────────────────────────────────────────────
+    def _toggle_drag_pos(self):
+        self._comp_drag_active = not self._comp_drag_active
+        if self._comp_drag_active:
+            self._drag_pos_btn.config(text="✋  Drag to position: ON",  bg=C["orange"])
+            self._comp_canvas.config(cursor="fleur")
+            self._set_status("Drag mode ON — click and drag the overlay on the composite preview.")
+        else:
+            self._drag_pos_btn.config(text="✋  Drag to position: OFF", bg=C["dim"])
+            self._comp_canvas.config(cursor="")
+            self._set_status("Drag mode OFF.")
+
+    def _drag_pos_press(self, event):
+        if not self._comp_drag_active: return
+        self._comp_drag_last = (event.x, event.y)
+
+    def _drag_pos_motion(self, event):
+        if not self._comp_drag_active or self._comp_drag_last is None: return
+        dx = event.x - self._comp_drag_last[0]
+        dy = event.y - self._comp_drag_last[1]
+        self._comp_drag_last = (event.x, event.y)
+        sc = self._comp_canvas_scale
+        if sc <= 0: return
+        # convert canvas-pixel delta → video-pixel delta
+        vdx = int(dx / sc); vdy = int(dy / sc)
+        if vdx == 0 and vdy == 0: return
+        # read current position (custom X/Y or computed preset)
+        try:
+            cx = int(self._pos_x_var.get())
+            cy = int(self._pos_y_var.get())
+        except Exception:
+            cx, cy = self._compute_overlay_xy()
+        cx += vdx; cy += vdy
+        # clamp to base video bounds
+        if self.base_info:
+            ow, oh = self._cropped_ov_size()
+            sc2 = self._scale_var.get() / 100
+            ow = int(ow * sc2); oh = int(oh * sc2)
+            cx = max(0, min(cx, self.base_info[0] - ow))
+            cy = max(0, min(cy, self.base_info[1] - oh))
+        self._pos_x_var.set(str(cx))
+        self._pos_y_var.set(str(cy))
+        self._refresh_composite()
+
+    def _drag_pos_release(self, event):
+        self._comp_drag_last = None
+
+    # ── AUTO-CROP TO TEXT ─────────────────────────────────────────────────────
+    def _auto_crop(self):
+        """Analyse the overlay frame and set crop to the bounding box of
+        visible content (non-transparent for WebM, non-black for MP4)."""
+        if self._ov_frame is None:
+            messagebox.showwarning("No overlay", "Load an overlay video first.")
+            return
+        try:
+            img = self._ov_frame.convert("RGBA")
+            arr = np.array(img)
+            is_webm = self.overlay_path and self.overlay_path.lower().endswith(".webm")
+
+            if is_webm:
+                # find pixels with meaningful alpha (> 10)
+                mask = arr[:, :, 3] > 10
+            else:
+                # find pixels brighter than a near-black threshold on any channel
+                mask = np.any(arr[:, :, :3] > 20, axis=2)
+
+            rows = np.any(mask, axis=1)
+            cols = np.any(mask, axis=0)
+            if not rows.any():
+                messagebox.showinfo("Auto-crop", "No visible content found in overlay.")
+                return
+
+            row_min, row_max = int(np.argmax(rows)), int(len(rows) - 1 - np.argmax(rows[::-1]))
+            col_min, col_max = int(np.argmax(cols)), int(len(cols) - 1 - np.argmax(cols[::-1]))
+
+            # add a small padding
+            pad = 8
+            x0 = max(0, col_min - pad); y0 = max(0, row_min - pad)
+            x1 = min(img.width,  col_max + pad)
+            y1 = min(img.height, row_max + pad)
+            cw = x1 - x0; ch = y1 - y0
+
+            if cw < 2 or ch < 2:
+                messagebox.showinfo("Auto-crop", "Bounding box too small.")
+                return
+
+            self.crop = (x0, y0, cw, ch)
+            self._crop_lbl.config(text=f"auto  x={x0}  y={y0}  w={cw}  h={ch}",
+                                   fg=C["accent"])
+            self._redraw_ov_canvas()
+            self._update_text_strip(self._ov_frame)
+            self._refresh_composite()
+            self._set_status(f"Auto-crop applied: {cw}×{ch} px at ({x0},{y0})")
+        except Exception as e:
+            messagebox.showerror("Auto-crop error", str(e))
 
     # ── LOG / STATUS ──────────────────────────────────────────────────────────
     def _log_append(self, msg):

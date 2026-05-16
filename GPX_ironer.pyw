@@ -395,6 +395,7 @@ class IronApp:
         self.tree.pack(side="left", fill="both", expand=True)
         tsb.pack(side="right", fill="y")
         self.tree.bind("<Double-1>", self._on_tree_double_click)
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
         # point count label
         self.pt_count_lbl = tk.Label(center, text="",
@@ -1399,6 +1400,15 @@ class IronApp:
         lat, lon = self.points[idx][0], self.points[idx][1]
         self.map_widget.set_position(lat, lon)
         self.map_widget.set_zoom(15); self._zoom_level[0] = 15
+
+    def _on_tree_select(self, event=None):
+        """When a row is selected in the tree, center the map on that point."""
+        sel = self.tree.selection()
+        if not sel or not self.points: return
+        idx = int(self.tree.item(sel[0], "values")[0])
+        if 0 <= idx < len(self.points):
+            lat, lon = self.points[idx][0], self.points[idx][1]
+            self.map_widget.set_position(lat, lon)
 
     def _on_map_click(self, coords):
         """Find the closest visible point to the clicked map position,
