@@ -137,6 +137,7 @@ class IronApp:
         self._drag_mode       = False      # True = drag-to-move, False = click-to-select
         self._drag_idx        = None       # index of point being dragged
         self._drag_marker     = None       # temporary marker shown during drag
+        self._sel_marker      = None       # amber pin for selected point
 
         # ── ttk style ─────────────────────────────────────────────────────────
         sty = ttk.Style(root); sty.theme_use("clam")
@@ -826,6 +827,10 @@ class IronApp:
 
         self.map_widget.delete_all_path()
         self.map_widget.delete_all_marker()
+        if self._sel_marker:
+            try: self._sel_marker.delete()
+            except: pass
+            self._sel_marker = None
         if not self.points: return
 
         draw_idxs = (range(self.focus_range[0], min(self.focus_range[1]+1, len(self.points)))
@@ -1402,13 +1407,21 @@ class IronApp:
         self.map_widget.set_zoom(15); self._zoom_level[0] = 15
 
     def _on_tree_select(self, event=None):
-        """When a row is selected in the tree, center the map on that point."""
+        """When a row is selected in the tree, center the map and show a highlight pin."""
         sel = self.tree.selection()
         if not sel or not self.points: return
         idx = int(self.tree.item(sel[0], "values")[0])
-        if 0 <= idx < len(self.points):
-            lat, lon = self.points[idx][0], self.points[idx][1]
-            self.map_widget.set_position(lat, lon)
+        if not (0 <= idx < len(self.points)): return
+        lat, lon = self.points[idx][0], self.points[idx][1]
+        self.map_widget.set_position(lat, lon)
+        if self._sel_marker:
+            try: self._sel_marker.delete()
+            except: pass
+        self._sel_marker = self.map_widget.set_marker(
+            lat, lon, text=str(idx),
+            marker_color_circle=C["accent"],
+            marker_color_outside=C["accent2"]
+        )
 
     def _on_map_click(self, coords):
         """Find the closest visible point to the clicked map position,
@@ -1430,9 +1443,17 @@ class IronApp:
                 self.tree.see(item)
                 break
 
-        # center map on the found point (no refresh — just reposition)
+        # center map and show highlight pin
         p = self.points[best_idx]
         self.map_widget.set_position(p[0], p[1])
+        if self._sel_marker:
+            try: self._sel_marker.delete()
+            except: pass
+        self._sel_marker = self.map_widget.set_marker(
+            p[0], p[1], text=str(best_idx),
+            marker_color_circle=C["accent"],
+            marker_color_outside=C["accent2"]
+        )
         self._set_status(f"Closest point: #{best_idx}  ({p[0]:.7f}, {p[1]:.7f})")
 
     def _on_tree_double_click(self, event):

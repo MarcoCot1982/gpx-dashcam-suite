@@ -214,10 +214,11 @@ def gpx_has_elevation(gpx_points) -> bool:
     """Return True if at least one point already carries elevation data."""
     return any(pt.elevation is not None for pt in gpx_points)
 
-def fetch_elevation(gpx_points, overwrite=True, status_cb=None, stop_check=None):
+def fetch_elevation(gpx_points, overwrite=True, status_cb=None, stop_check=None, map_cb=None):
     """
     Fetch SRTM 30m elevation from opentopodata.org and apply to gpx_points in-place.
     overwrite=False leaves points that already have elevation untouched.
+    map_cb(done_up_to) is called after each batch with the index of the last processed point.
     Returns (filled_count, error_count).
     """
     total  = len(gpx_points)
@@ -230,6 +231,7 @@ def fetch_elevation(gpx_points, overwrite=True, status_cb=None, stop_check=None)
         indices = [i for i, pt in enumerate(batch)
                    if overwrite or pt.elevation is None]
         if not indices:
+            if map_cb: map_cb(start + ELEVATION_BATCH)
             continue
         locs          = "|".join(f"{batch[i].latitude},{batch[i].longitude}" for i in indices)
         batch_n       = start // ELEVATION_BATCH + 1
@@ -247,6 +249,8 @@ def fetch_elevation(gpx_points, overwrite=True, status_cb=None, stop_check=None)
                     filled += 1
         except Exception:
             errors += 1
+        if map_cb:
+            map_cb(min(start + ELEVATION_BATCH, total))
         if start + ELEVATION_BATCH < total:
             time.sleep(ELEVATION_DELAY)
     return filled, errors
@@ -893,6 +897,43 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
         preview_text.insert(tk.END, f"⛰  Fetching elevation for {total:,} points…\n")
         preview_text.see(tk.END)
 
+        # ── Elevation map: draw full track in dim grey, then erase batches as done ──
+        _all_coords  = [(pt.latitude, pt.longitude) for pt in all_pts]
+        _ele_pending = [None]   # path object for the remaining (undone) portion
+        _ele_done    = [None]   # path object for the completed (done) portion
+
+        def _draw_elevation_map_initial():
+            map_widget.delete_all_path()
+            map_widget.delete_all_marker()
+            if len(_all_coords) > 1:
+                _ele_pending[0] = map_widget.set_path(_all_coords, color=C["dim"], width=2)
+            # fit view to track
+            lats = [c[0] for c in _all_coords]; lons = [c[1] for c in _all_coords]
+            center = ((min(lats)+max(lats))/2, (min(lons)+max(lons))/2)
+            map_widget.set_position(*center)
+            span = max(max(lats)-min(lats), max(lons)-min(lons))
+            z = 7 if span>5 else 9 if span>2 else 10 if span>1 else 12 if span>0.3 else 13 if span>0.1 else 14
+            current_zoom[0] = z; map_widget.set_zoom(z)
+
+        root.after(0, _draw_elevation_map_initial)
+
+        def _ele_map_cb(done_up_to):
+            """Called on the worker thread after each batch; schedules UI update via after()."""
+            def _update():
+                # erase old paths
+                for obj in (_ele_pending[0], _ele_done[0]):
+                    if obj:
+                        try: obj.delete()
+                        except: pass
+                _ele_pending[0] = None; _ele_done[0] = None
+                done_coords    = _all_coords[:done_up_to]
+                pending_coords = _all_coords[done_up_to:]
+                if len(pending_coords) > 1:
+                    _ele_pending[0] = map_widget.set_path(pending_coords, color=C["dim"], width=2)
+                if len(done_coords) > 1:
+                    _ele_done[0] = map_widget.set_path(done_coords, color=C["green"], width=2)
+            root.after(0, _update)
+
         def _ele_status(batch_n, total_batches, pct, done, tot):
             status_label.config(
                 text=f"⛰  Elevation batch {batch_n}/{total_batches}  ·  {pct}%  ·  {done:,}/{tot:,} pts")
@@ -903,13 +944,26 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
             all_pts,
             overwrite=overwrite_ele,
             status_cb=_ele_status,
-            stop_check=lambda: stop_event.is_set())
+            stop_check=lambda: stop_event.is_set(),
+            map_cb=_ele_map_cb)
 
         preview_text.insert(tk.END,
             f"⛰  Elevation done — {filled:,}/{total:,} pts"
             f"{'' if errors == 0 else f'  ({errors} error(s))'}\n\n")
         preview_text.see(tk.END)
         progress_var.set(50)
+
+        # clear elevation paths before geocoding view takes over
+        def _clear_ele_map():
+            for obj in (_ele_pending[0], _ele_done[0]):
+                if obj:
+                    try: obj.delete()
+                    except: pass
+            _ele_pending[0] = None; _ele_done[0] = None
+            map_widget.delete_all_path()
+            map_widget.delete_all_marker()
+        root.after(0, _clear_ele_map)
+        with map_buffer_lock: map_coords_buffer.clear()
 
     # ── Phase 2: Reverse geocoding ────────────────────────────────────────────
     # determine output path
@@ -975,7 +1029,8 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
 
         # preview
         try:
-            preview_text.insert(tk.END, f"#{i+1:05d}  {cmt}\n")
+            pt_time = pt.time.strftime("%Y-%m-%d %H:%M:%S") if pt.time else f"#{i+1:05d}"
+            preview_text.insert(tk.END, f"{pt_time}  {cmt}\n")
             preview_text.see(tk.END)
         except Exception: pass
 

@@ -35,7 +35,7 @@ import tkintermapview
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION        = "v1.2"
+VERSION        = "v1.3"
 AUTHOR         = "Marco Cot"
 CONTACT        = "marcocot1982@gmail.com"
 SPLASH_SECONDS = 4
@@ -211,24 +211,40 @@ def canvas_to_latlon(map_widget, cx, cy):
 
 
 def latlon_to_canvas(map_widget, lat, lon):
-    """Convert (lat, lon) → canvas pixel coords.  Returns (x, y) or None."""
+    """
+    Convert (lat, lon) → pixel coords on map_widget.canvas.
+    Returns (x, y) as floats, or None on failure.
+    Tries the public API first, falls back to tile maths.
+    """
+    # Method 1: public API (tkintermapview ≥ 0.2)
     try:
-        return map_widget.convert_decimal_coords_to_canvas_coords(lat, lon)
+        result = map_widget.convert_decimal_coords_to_canvas_coords(lat, lon)
+        if result is not None and len(result) == 2:
+            return float(result[0]), float(result[1])
     except Exception:
         pass
+
+    # Method 2: tile maths using upper_left_tile_pos
     try:
-        zoom   = map_widget.zoom
-        ul     = map_widget.upper_left_tile_pos
-        n      = 2 ** zoom
+        zoom = map_widget.zoom
+        ul   = map_widget.upper_left_tile_pos
+        if ul is None:
+            return None
+        n      = 2.0 ** zoom
         tile_x = (lon + 180.0) / 360.0 * n
         lat_r  = math.radians(lat)
-        tile_y = ((1 - math.log(math.tan(lat_r) +
-                                 1 / math.cos(lat_r)) / math.pi) / 2) * n
+        tile_y = (1 - math.log(math.tan(lat_r) + 1.0 / math.cos(lat_r)) / math.pi) / 2 * n
         cx = (tile_x - ul[0]) * 256.0
         cy = (tile_y - ul[1]) * 256.0
-        return cx, cy
+        # Sanity: must be within 2× the visible canvas
+        cw = map_widget.canvas.winfo_width()  or 800
+        ch = map_widget.canvas.winfo_height() or 600
+        if -cw < cx < 2*cw and -ch < cy < 2*ch:
+            return cx, cy
     except Exception:
-        return None
+        pass
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -641,7 +657,7 @@ hfov_var       = tk.StringVar(value="90")
 sample_fps_var = tk.StringVar(value="5")
 smoothing_var  = tk.StringVar(value="5")
 speed_cal_var  = tk.StringVar(value="1.80")   # speed calibration multiplier
-hdg_cal_var    = tk.StringVar(value="-30.3")  # degrees/px for whole-frame vx heading
+hdg_cal_var    = tk.StringVar(value="0")      # 0 = heading locked (use Road Snap)
 start_time_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 dest_var       = tk.IntVar(value=2)
 autocenter_var = tk.BooleanVar(value=True)
@@ -670,96 +686,96 @@ def open_map_picker():
 
     # ── state ──────────────────────────────────────────────────────────────
     ps = {
-        "step":         0,      # 0=place start, 1=rotate arrow, 2=locked
-        "start":        None,   # (lat, lon)
-        "heading":      0.0,
-        "start_marker": None,
-        "press_x":      0,
-        "press_y":      0,
+        "step":           0,       # 0=place start, 1=rotate arrow, 2=locked
+        "start":          None,    # (lat, lon)
+        "heading":        0.0,
+        "start_marker":   None,
+        "search_marker":  None,    # blue pin from search result (draggable)
+        "press_x":        0,
+        "press_y":        0,
+        "arrow_pending":  False,   # True = waiting for canvas to resolve before drawing
         # canvas arrow items
-        "arrow_shaft":  None,
-        "arrow_head":   None,
-        "arrow_circle": None,
-        "arrow_label":  None,
-        "arrow_hint":   None,
+        "arrow_shaft":    None,
+        "arrow_head":     None,
+        "arrow_circle":   None,
+        "arrow_label":    None,
+        "arrow_hint":     None,
     }
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _delete_arrow():
-        canvas = pm.canvas
-        for key in ("arrow_shaft", "arrow_head",
-                    "arrow_circle", "arrow_label", "arrow_hint"):
-            if ps[key]:
-                try: canvas.delete(ps[key])
-                except Exception: pass
-                ps[key] = None
+        ov = ps.get("overlay")
+        if ov:
+            try: ov.delete("arrow")
+            except Exception: pass
 
     def _draw_arrow(cx, cy, heading_deg, locked=False):
-        """Draw (or redraw) the heading arrow centred at canvas (cx, cy)."""
-        canvas = pm.canvas
+        """Draw the heading arrow on the persistent overlay canvas."""
         _delete_arrow()
+        ov = ps.get("overlay")
+        if ov is None:
+            return
 
-        rad = math.radians(heading_deg)
-        # Tip of arrow
-        tip_x = cx + ARROW_LENGTH * math.sin(rad)
-        tip_y = cy - ARROW_LENGTH * math.cos(rad)
-        # Shaft end (short back-stub)
-        stub  = ARROW_LENGTH * 0.18
+        rad    = math.radians(heading_deg)
+        tip_x  = cx + ARROW_LENGTH * math.sin(rad)
+        tip_y  = cy - ARROW_LENGTH * math.cos(rad)
+        stub   = ARROW_LENGTH * 0.18
         base_x = cx - stub * math.sin(rad)
         base_y = cy + stub * math.cos(rad)
 
-        color  = C["accent"] if locked else "#ffdd88"
+        color  = C["accent"] if locked else "#ffe066"
         lwidth = ARROW_WIDTH + 1 if locked else ARROW_WIDTH
 
-        # Shaft
-        ps["arrow_shaft"] = canvas.create_line(
-            base_x, base_y, tip_x, tip_y,
-            fill=color, width=lwidth, tags="arrow")
+        # Drop-shadow
+        sh = 2
+        ov.create_line(base_x+sh, base_y+sh, tip_x+sh, tip_y+sh,
+                       fill="#000000", width=lwidth+3, tags="arrow")
 
-        # Arrowhead (filled triangle)
+        # Shaft
+        ov.create_line(base_x, base_y, tip_x, tip_y,
+                       fill=color, width=lwidth, tags="arrow")
+
+        # Arrowhead
         perp_x = math.cos(rad) * (ARROW_HEAD_W / 2)
         perp_y = math.sin(rad) * (ARROW_HEAD_W / 2)
         back_x = tip_x - ARROW_HEAD * math.sin(rad)
         back_y = tip_y + ARROW_HEAD * math.cos(rad)
-        ps["arrow_head"] = canvas.create_polygon(
-            tip_x, tip_y,
-            back_x + perp_x, back_y + perp_y,
-            back_x - perp_x, back_y - perp_y,
-            fill=color, outline="", tags="arrow")
+        ov.create_polygon(tip_x, tip_y,
+                          back_x + perp_x, back_y + perp_y,
+                          back_x - perp_x, back_y - perp_y,
+                          fill=color, outline="", tags="arrow")
 
-        # Centre dot
-        ps["arrow_circle"] = canvas.create_oval(
-            cx - CIRCLE_R, cy - CIRCLE_R,
-            cx + CIRCLE_R, cy + CIRCLE_R,
-            fill=C["green"], outline="white", width=2, tags="arrow")
+        # Centre dot (marks exact start position)
+        ov.create_oval(cx - CIRCLE_R - 1, cy - CIRCLE_R - 1,
+                       cx + CIRCLE_R + 1, cy + CIRCLE_R + 1,
+                       fill="#000000", outline="", tags="arrow")
+        ov.create_oval(cx - CIRCLE_R, cy - CIRCLE_R,
+                       cx + CIRCLE_R, cy + CIRCLE_R,
+                       fill=C["green"], outline="white", width=2, tags="arrow")
 
-        # Heading label next to arrowhead
+        # Heading label
         cmp = compass_label(heading_deg)
-        lx  = tip_x + 14 * math.sin(rad)
-        ly  = tip_y - 14 * math.cos(rad)
-        ps["arrow_label"] = canvas.create_text(
-            lx, ly,
-            text=f"{heading_deg:.0f}°  {cmp}",
-            fill=color,
-            font=("Consolas", 10, "bold"),
-            anchor="w" if math.sin(rad) >= 0 else "e",
-            tags="arrow")
+        lx   = tip_x + 16 * math.sin(rad)
+        ly   = tip_y - 16 * math.cos(rad)
+        anch = "w" if math.sin(rad) >= 0 else "e"
+        ov.create_text(lx+1, ly+1, text=f"{heading_deg:.0f}°  {cmp}",
+                       fill="#000000", font=("Consolas", 10, "bold"),
+                       anchor=anch, tags="arrow")
+        ov.create_text(lx, ly, text=f"{heading_deg:.0f}°  {cmp}",
+                       fill=color, font=("Consolas", 10, "bold"),
+                       anchor=anch, tags="arrow")
 
-        # Hint text (only while unlocked)
+        # Hint (only while unlocked)
         if not locked:
-            ps["arrow_hint"] = canvas.create_text(
-                cx, cy + ARROW_LENGTH + 26,
-                text="move mouse to aim  ·  click to lock",
-                fill=C["muted"],
-                font=("Consolas", 8),
-                tags="arrow")
+            ov.create_text(cx, cy + ARROW_LENGTH + 28,
+                           text="move mouse to aim  ·  click to lock",
+                           fill=C["muted"], font=("Consolas", 8), tags="arrow")
 
     def _start_canvas_xy():
         """Return canvas (x, y) for the current start position, or None."""
         if ps["start"] is None:
             return None
-        result = latlon_to_canvas(pm, ps["start"][0], ps["start"][1])
-        return result   # may be None if conversion fails
+        return latlon_to_canvas(pm, ps["start"][0], ps["start"][1])
 
     def _update_arrow_from_mouse(mx, my):
         """Called on every mouse-move while in step 1 (rotating)."""
@@ -885,13 +901,38 @@ def open_map_picker():
         if not sel:
             return
         r = _search_results[sel[0]]
+        lat, lon = r["lat"], r["lon"]
         try:
-            pm.set_position(r["lat"], r["lon"])
-            pm.set_zoom(13)
+            pm.set_position(lat, lon)
+            pm.set_zoom(15)
             _hide_results()
             search_status.config(text="")
         except Exception:
             pass
+
+        # Place a blue suggestion pin — user still needs to click
+        # to confirm the exact start position (keeps the UX unambiguous)
+        if ps["search_marker"]:
+            try: ps["search_marker"].delete()
+            except Exception: pass
+            ps["search_marker"] = None
+
+        try:
+            ps["search_marker"] = pm.set_marker(
+                lat, lon,
+                text="? click to confirm",
+                marker_color_circle=C["blue"],
+                marker_color_outside="#0d47a1")
+        except Exception:
+            pass
+
+        # Stay in step 0: the suggestion shows WHERE to click,
+        # but the user must click the map to set the actual start.
+        coord_lbl.config(
+            text=f"Suggestion:  {lat:.6f},  {lon:.6f}  — click map to confirm")
+        instr_var.set(
+            "Search result shown (blue pin)  —  "
+            "click the map to place your START point, or click elsewhere to refine")
 
     results_lb.bind("<<ListboxSelect>>", _on_result_select)
     results_lb.bind("<Return>",          _on_result_select)
@@ -914,10 +955,18 @@ def open_map_picker():
               anchor="w").pack(side="left", fill="x", expand=True)
 
     # ── map ────────────────────────────────────────────────────────────────
+    # Arrow is drawn on a separate overlay Canvas stacked above tkintermapview.
+    # tkintermapview never touches it, so the arrow persists across tile reloads.
+    # Panning/zooming: we forward drag events from the overlay to pm.canvas.
+    # Click detection: press+release with drag-guard, on the overlay only.
     map_border = tk.Frame(d, bg=C["accent"], padx=2, pady=2)
     map_border.pack(fill="both", expand=True, padx=10, pady=(4, 0))
-    pm = tkintermapview.TkinterMapView(map_border, corner_radius=0)
-    pm.pack(fill="both", expand=True)
+
+    map_stack = tk.Frame(map_border, bg="black")
+    map_stack.pack(fill="both", expand=True)
+
+    pm = tkintermapview.TkinterMapView(map_stack, corner_radius=0)
+    pm.place(relx=0, rely=0, relwidth=1, relheight=1)
     pm.set_tile_server("https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
 
     try:
@@ -925,6 +974,66 @@ def open_map_picker():
         pm.set_zoom(13)
     except ValueError:
         pm.set_position(40.0, -3.7); pm.set_zoom(4)
+
+    # Overlay canvas — arrow lives here permanently
+    ov = tk.Canvas(map_stack, bg="", highlightthickness=0)
+    ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+    ps["overlay"] = ov
+
+    # ── forward pan/zoom from overlay to the map ───────────────────────────
+    # We track whether the current gesture started as a pan (moved > threshold)
+    # and if so route all motion+release to pm.canvas for native panning.
+    _pan_active = [False]
+
+    def _ov_press(e):
+        ps["press_x"] = e.x
+        ps["press_y"] = e.y
+        _pan_active[0] = False
+        pm.canvas.event_generate("<ButtonPress-1>", x=e.x, y=e.y)
+
+    def _ov_motion(e):
+        dx = abs(e.x - ps["press_x"])
+        dy = abs(e.y - ps["press_y"])
+        if dx > DRAG_THRESHOLD or dy > DRAG_THRESHOLD:
+            _pan_active[0] = True
+        if _pan_active[0]:
+            pm.canvas.event_generate("<B1-Motion>", x=e.x, y=e.y)
+        else:
+            # Not a pan yet — update heading arrow live
+            if ps["step"] == 1:
+                _update_arrow_from_mouse(e.x, e.y)
+
+    def _ov_release(e):
+        if _pan_active[0]:
+            # Was a pan — let the map finish it, redraw arrow after
+            pm.canvas.event_generate("<ButtonRelease-1>", x=e.x, y=e.y)
+            _pan_active[0] = False
+            d.after(150, _on_map_move)
+            return
+        # Genuine click
+        _on_release(e)
+
+    def _ov_motion_passive(e):
+        """Pure mouse-move (no button held) — update arrow aim."""
+        if ps["step"] == 1:
+            _update_arrow_from_mouse(e.x, e.y)
+
+    def _ov_scroll(e):
+        pm.canvas.event_generate("<MouseWheel>", x=e.x, y=e.y, delta=e.delta)
+        d.after(150, _on_map_move)
+
+    def _ov_scroll_linux(e):
+        btn = "<Button-4>" if e.num == 4 else "<Button-5>"
+        pm.canvas.event_generate(btn, x=e.x, y=e.y)
+        d.after(150, _on_map_move)
+
+    ov.bind("<ButtonPress-1>",   _ov_press)
+    ov.bind("<B1-Motion>",       _ov_motion)
+    ov.bind("<ButtonRelease-1>", _ov_release)
+    ov.bind("<Motion>",          _ov_motion_passive)
+    ov.bind("<MouseWheel>",      _ov_scroll)
+    ov.bind("<Button-4>",        _ov_scroll_linux)
+    ov.bind("<Button-5>",        _ov_scroll_linux)
 
     # ── info / button bar ──────────────────────────────────────────────────
     info_bar = tk.Frame(d, bg=C["panel2"], height=44)
@@ -947,10 +1056,12 @@ def open_map_picker():
         ps["step"] = 0
         ps["start"] = None
         ps["heading"] = 0.0
-        if ps["start_marker"]:
-            try: ps["start_marker"].delete()
-            except Exception: pass
-            ps["start_marker"] = None
+        ps["arrow_pending"] = False
+        for key in ("start_marker", "search_marker"):
+            if ps[key]:
+                try: ps[key].delete()
+                except Exception: pass
+                ps[key] = None
         _delete_arrow()
         confirm_btn.config(state="disabled", bg=C["dim"], fg=C["muted"])
         coord_lbl.config(text="—")
@@ -989,14 +1100,7 @@ def open_map_picker():
     confirm_btn.config(command=_confirm)
 
     # ── MOUSE MOTION → rotate arrow ────────────────────────────────────────
-    def _on_motion(event):
-        if ps["step"] == 1:
-            _update_arrow_from_mouse(event.x, event.y)
-
-    # ── MAP CLICK HANDLING  (press + release + drag guard) ─────────────────
-    def _on_press(event):
-        ps["press_x"] = event.x
-        ps["press_y"] = event.y
+    # ── MAP CLICK HANDLING (press + release + drag guard) ─────────────────
 
     def _on_release(event):
         if (abs(event.x - ps["press_x"]) > DRAG_THRESHOLD or
@@ -1010,6 +1114,11 @@ def open_map_picker():
         if ps["step"] == 0:
             # ── Place START ────────────────────────────────────────────────
             ps["start"] = (lat, lon)
+            # Remove search-result pin if present
+            if ps["search_marker"]:
+                try: ps["search_marker"].delete()
+                except Exception: pass
+                ps["search_marker"] = None
             if ps["start_marker"]:
                 try: ps["start_marker"].delete()
                 except Exception: pass
@@ -1023,15 +1132,35 @@ def open_map_picker():
                 "Step 2  —  Move mouse to aim the heading arrow, then click to lock")
             ps["step"] = 1
             # Draw initial north-pointing arrow immediately
+            d.update_idletasks()
             sc = latlon_to_canvas(pm, lat, lon)
-            if sc:
+            if sc is not None:
                 _draw_arrow(sc[0], sc[1], 0.0, locked=False)
+            else:
+                ps["arrow_pending"] = True
+            # Also retry after 300 ms in case tiles are still loading
+            d.after(300, _on_map_move)
+            d.after(600, _on_map_move)
             confirm_btn.config(state="normal", bg=C["orange"], fg="white")
 
         elif ps["step"] == 1:
-            # ── Lock heading ───────────────────────────────────────────────
+            # ── Lock heading — also upgrade search pin to green START ──────
+            # If we're still on a search pin rather than a manually clicked point,
+            # the user accepted the search location — upgrade the marker.
+            if ps["search_marker"] and not ps["start_marker"]:
+                try: ps["search_marker"].delete()
+                except Exception: pass
+                ps["search_marker"] = None
+                try:
+                    slat, slon = ps["start"]
+                    ps["start_marker"] = pm.set_marker(
+                        slat, slon, text="START",
+                        marker_color_circle=C["green"],
+                        marker_color_outside="#1b5e20")
+                except Exception:
+                    pass
             sc = _start_canvas_xy()
-            if sc:
+            if sc is not None:
                 _update_arrow_from_mouse(event.x, event.y)
                 _draw_arrow(sc[0], sc[1], ps["heading"], locked=True)
             cmp = compass_label(ps["heading"])
@@ -1050,27 +1179,37 @@ def open_map_picker():
                 "Step 2  —  Move mouse to aim the heading arrow, then click to lock")
             confirm_btn.config(state="normal", bg=C["orange"], fg="white")
 
-    # Redraw arrow when map is panned/zoomed (start position moves in canvas space)
+    # Redraw arrow on pan/zoom
     def _on_map_move(event=None):
-        if ps["step"] in (1, 2) and ps["start"]:
-            sc = _start_canvas_xy()
-            if sc:
-                _draw_arrow(sc[0], sc[1], ps["heading"],
-                            locked=(ps["step"] == 2))
+        if ps["step"] not in (1, 2) or ps["start"] is None:
+            return
+        sc = _start_canvas_xy()
+        if sc is not None:
+            ps["arrow_pending"] = False
+            _draw_arrow(sc[0], sc[1], ps["heading"], locked=(ps["step"] == 2))
+        else:
+            ps["arrow_pending"] = True
 
-    canvas = pm.canvas
-    canvas.bind("<ButtonPress-1>",   _on_press,   add="+")
-    canvas.bind("<ButtonRelease-1>", _on_release, add="+")
-    canvas.bind("<Motion>",          _on_motion,  add="+")
-    # Redraw arrow after map tiles finish rendering (handles pan/zoom)
-    canvas.bind("<Configure>", _on_map_move, add="+")
-    pm.canvas.bind("<ButtonRelease-2>", _on_map_move, add="+")  # middle-button pan
-    # Also poll periodically to cope with scroll-wheel zoom repositioning
+    # Poll every 250 ms: keeps arrow on pin after pan/zoom and resolves pending draws
     def _poll_arrow():
-        if d.winfo_exists():
-            _on_map_move()
-            d.after(250, _poll_arrow)
-    d.after(250, _poll_arrow)
+        if not d.winfo_exists():
+            return
+        if ps["start"] is not None and ps["step"] in (1, 2):
+            sc = _start_canvas_xy()
+            if sc is not None:
+                if ps["step"] == 2:
+                    # Always redraw locked arrow so it tracks pan/zoom
+                    _draw_arrow(sc[0], sc[1], ps["heading"], locked=True)
+                elif ps["arrow_pending"]:
+                    # Pending: first draw in step 1 — show north arrow
+                    ps["arrow_pending"] = False
+                    _draw_arrow(sc[0], sc[1], ps["heading"], locked=False)
+                # step 1 non-pending: live mouse motion draws it via _ov_motion_passive
+            else:
+                ps["arrow_pending"] = True
+        d.after(250, _poll_arrow)
+
+    d.after(200, _poll_arrow)
 
     # Focus search entry on open
     d.after(100, search_entry.focus_set)
@@ -1229,10 +1368,11 @@ dim_lbl(left,
         "Speed ×: multiplier for distance estimate.\n"
         "  1.80 = calibrated for EIS dashcams.\n"
         "  Tune using a known-distance reference.\n"
-        "Hdg °/px: degrees per pixel of lateral\n"
-        "  frame drift.  Negative = objects moving\n"
-        "  right means left turn (typical dashcam).\n"
-        "  0 = heading stays fixed (trust Road Snap).")
+        "Hdg °/px: 0 = heading locked at initial\n"
+        "  value (recommended — use Road Snap to\n"
+        "  correct direction after this step).\n"
+        "  EIS cameras: any non-zero value adds\n"
+        "  noise. Leave at 0.")
 
 # ── START POSITION ────────────────────────────────────────────────────────────
 sec_hdr(left, "START POSITION")

@@ -13,6 +13,7 @@ Lets the user crop just the text strip, position it, scale it, and set a start o
 import os, sys, re, subprocess, threading, time, queue
 from datetime import datetime, timedelta
 
+import numpy as np
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import cv2
@@ -131,8 +132,12 @@ def video_info(path):
     cap.release()
     return w, h, fps, dur
 
-def read_frame_at(path, t_sec):
-    """Read one BGR frame from video at t_sec. Returns PIL RGB image or None."""
+def read_frame_at(path, t_sec, rgba=False):
+    """Read one frame from video at t_sec.
+    rgba=True uses ffmpeg pipe to preserve VP9 alpha (needed for WebM overlays).
+    Returns PIL RGBA image or None."""
+    if rgba:
+        return _read_frame_rgba_ffmpeg(path, t_sec)
     cap = cv2.VideoCapture(path)
     cap.set(cv2.CAP_PROP_POS_MSEC, max(0, t_sec) * 1000)
     ret, frame = cap.read()
@@ -140,6 +145,70 @@ def read_frame_at(path, t_sec):
     if not ret or frame is None:
         return None
     return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+def _read_frame_rgba_ffmpeg(path, t_sec):
+    """Extract one RGBA frame from a video using ffmpeg subprocess.
+    This is the only reliable way to read VP9 alpha from WebM files."""
+    try:
+        w, h, fps, dur = video_info(path)
+        if w == 0 or h == 0:
+            return None
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", f"{max(0, t_sec):.3f}",
+            "-i", path,
+            "-vframes", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgba",
+            "pipe:1"
+        ]
+        proc = subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW)
+        if proc.returncode != 0 or len(proc.stdout) < w * h * 4:
+            return None
+        arr = np.frombuffer(proc.stdout[:w * h * 4], dtype=np.uint8).reshape(h, w, 4)
+        return Image.fromarray(arr, "RGBA")
+    except Exception:
+        return None
+
+def scan_overlay_widths(path, is_webm, status_cb=None):
+    """
+    Sample frames every 30s throughout the overlay video and return the
+    widest content bounding-box found (col_min, col_max).
+    status_cb(n_done, n_total) is called on each frame for progress updates.
+    Fast: only reads ~1 frame per 30s regardless of video length.
+    """
+    w, h, fps, dur = video_info(path)
+    interval = 30.0
+    times = list(np.arange(0, max(dur, 1), interval))
+    if not times:
+        times = [0.0]
+    col_min_all = w; col_max_all = 0
+
+    for i, t in enumerate(times):
+        if is_webm:
+            img = _read_frame_rgba_ffmpeg(path, t)
+            if img is None:
+                continue
+            arr  = np.array(img.convert("RGBA"))
+            mask = arr[:, :, 3] > 10
+        else:
+            img = read_frame_at(path, t)
+            if img is None:
+                continue
+            arr  = np.array(img.convert("RGBA"))
+            mask = np.any(arr[:, :, :3] > 20, axis=2)
+
+        cols = np.any(mask, axis=0)
+        if cols.any():
+            col_min = int(np.argmax(cols))
+            col_max = int(len(cols) - 1 - np.argmax(cols[::-1]))
+            col_min_all = min(col_min_all, col_min)
+            col_max_all = max(col_max_all, col_max)
+
+        if status_cb:
+            status_cb(i + 1, len(times))
+
+    return col_min_all, col_max_all
 
 def parse_hms(s):
     """HH:MM:SS or raw seconds string → float seconds."""
@@ -266,8 +335,9 @@ class CompositorApp:
         cf = tk.Frame(left, bg=C["panel"]); cf.pack(fill="x", padx=10, pady=6)
         mk_lbl(cf, "Click & drag on the right panel →").pack(anchor="w", pady=(0, 4))
         cr2 = tk.Frame(cf, bg=C["panel"]); cr2.pack(fill="x", pady=(0, 2))
-        mk_btn(cr2, "⚡ Auto-crop to text", C["orange"],
-               self._auto_crop, font=("Consolas", 8, "bold")).pack(side="left", expand=True, fill="x", padx=(0, 2))
+        self._autocrop_btn = mk_btn(cr2, "⚡ Auto-crop to text", C["orange"],
+               self._auto_crop, font=("Consolas", 8, "bold"))
+        self._autocrop_btn.pack(side="left", expand=True, fill="x", padx=(0, 2))
         mk_btn(cr2, "✕ Reset", C["dim"],
                self.reset_crop, font=("Consolas", 8, "bold")).pack(side="left")
         self._crop_lbl = mk_lbl(cf, "Full frame — no crop active", fg=C["muted"])
@@ -506,7 +576,11 @@ class CompositorApp:
         c  = self._ov_canvas
         cw = c.winfo_width(); ch = c.winfo_height()
         if cw < 4 or ch < 4: return
-        img   = self._ov_frame.copy()
+        # Composite overlay onto a dark background so transparency shows correctly
+        ov   = self._ov_frame.convert("RGBA")
+        bg   = Image.new("RGBA", ov.size, (20, 20, 20, 255))
+        bg.paste(ov, (0, 0), ov)
+        img  = bg.convert("RGB")
         scale = min(cw / img.width, ch / img.height)
         nw    = int(img.width * scale); nh = int(img.height * scale)
         ox    = (cw - nw) // 2; oy = (ch - nh) // 2
@@ -516,7 +590,6 @@ class CompositorApp:
         self._ov_tk = ImageTk.PhotoImage(img)
         c.delete("all")
         c.create_image(ox, oy, anchor="nw", image=self._ov_tk)
-        # redraw existing crop rect
         if self.crop:
             self._draw_crop_rect_on_canvas()
 
@@ -590,11 +663,15 @@ class CompositorApp:
         c = self._text_canvas
         cw = c.winfo_width(); ch = c.winfo_height()
         if cw < 4 or ch < 4 or self._text_frame_pil is None: return
-        img = self._text_frame_pil.copy()
+        img = self._text_frame_pil.convert("RGBA")
         if self.crop:
             cx, cy, cw2, ch2 = self.crop
             if cw2 > 0 and ch2 > 0:
                 img = img.crop((cx, cy, cx + cw2, cy + ch2))
+        # composite on dark background so transparency is visible
+        bg = Image.new("RGBA", img.size, (20, 20, 20, 255))
+        bg.paste(img, (0, 0), img)
+        img = bg.convert("RGB")
         # scale to fit strip height, keep aspect
         scale = ch / img.height
         nw    = min(cw, int(img.width * scale))
@@ -649,8 +726,12 @@ class CompositorApp:
         if not p: return
         self.overlay_path  = p
         self.overlay_info  = video_info(p)
-        self._ov_frame     = read_frame_at(p, 0)
-        self.crop          = None
+        is_webm = p.lower().endswith(".webm")
+        # Use ffmpeg for WebM to preserve VP9 alpha; OpenCV strips it
+        self._ov_frame = read_frame_at(p, 0, rgba=is_webm)
+        if self._ov_frame is None:
+            self._ov_frame = read_frame_at(p, 0, rgba=False)
+        self.crop = None
         self._crop_lbl.config(text="Full frame — no crop active", fg=C["muted"])
         self._ov_lbl.config(
             text=f"{os.path.basename(p)}  ({self.overlay_info[0]}×{self.overlay_info[1]})",
@@ -840,17 +921,16 @@ class CompositorApp:
             self._ui_queue.put(("done", False, f"❌  Error: {e}"))
 
     def _preview_sampler(self, stop_event, offset_s, total_dur):
-        """
-        Periodically reads frames from both input videos, composites them,
-        and sends the result + the cropped overlay strip to the UI queue.
-        """
-        t = offset_s  # current base-video time being previewed
+        t        = offset_s
         interval = 1.2
+        is_webm  = self.overlay_path and self.overlay_path.lower().endswith(".webm")
         while not stop_event.is_set():
             try:
-                ov_t        = max(0.0, t - offset_s)
-                base_frame  = read_frame_at(self.base_path,    t)
-                ov_frame    = read_frame_at(self.overlay_path, ov_t)
+                ov_t       = max(0.0, t - offset_s)
+                base_frame = read_frame_at(self.base_path, t, rgba=False)
+                ov_frame   = read_frame_at(self.overlay_path, ov_t, rgba=is_webm)
+                if ov_frame is None and is_webm:
+                    ov_frame = read_frame_at(self.overlay_path, ov_t, rgba=False)
                 if base_frame and ov_frame:
                     ox, oy = self._compute_overlay_xy()
                     comp   = composite_frames(base_frame, ov_frame,
@@ -911,52 +991,126 @@ class CompositorApp:
 
     # ── AUTO-CROP TO TEXT ─────────────────────────────────────────────────────
     def _auto_crop(self):
-        """Analyse the overlay frame and set crop to the bounding box of
-        visible content (non-transparent for WebM, non-black for MP4)."""
+        """
+        1. Scan first frame for the Y bounds of the COMMENT line only
+           (exclude the timestamp at the bottom by detecting the gap between them).
+        2. Scan the full video (sampled every 30s) in a background thread to find
+           the WIDEST comment — so short comments don't clip long ones.
+        """
         if self._ov_frame is None:
             messagebox.showwarning("No overlay", "Load an overlay video first.")
             return
-        try:
-            img = self._ov_frame.convert("RGBA")
-            arr = np.array(img)
-            is_webm = self.overlay_path and self.overlay_path.lower().endswith(".webm")
+        if self.overlay_path is None:
+            return
 
+        is_webm = self.overlay_path.lower().endswith(".webm")
+
+        # ── Step 1: determine Y bounds from first frame ───────────────────────
+        try:
+            first = self._ov_frame.convert("RGBA")
+            arr   = np.array(first)
             if is_webm:
-                # find pixels with meaningful alpha (> 10)
                 mask = arr[:, :, 3] > 10
             else:
-                # find pixels brighter than a near-black threshold on any channel
                 mask = np.any(arr[:, :, :3] > 20, axis=2)
 
-            rows = np.any(mask, axis=1)
-            cols = np.any(mask, axis=0)
-            if not rows.any():
-                messagebox.showinfo("Auto-crop", "No visible content found in overlay.")
+            row_has_content = np.any(mask, axis=1)   # True for each row with pixels
+            if not row_has_content.any():
+                messagebox.showinfo("Auto-crop",
+                    "No visible content found in first overlay frame.\n"
+                    "Try loading the overlay again.")
                 return
 
-            row_min, row_max = int(np.argmax(rows)), int(len(rows) - 1 - np.argmax(rows[::-1]))
-            col_min, col_max = int(np.argmax(cols)), int(len(cols) - 1 - np.argmax(cols[::-1]))
+            # Find all contiguous bands of content rows
+            bands = []
+            in_band = False; band_start = 0
+            for r, val in enumerate(row_has_content):
+                if val and not in_band:
+                    in_band = True; band_start = r
+                elif not val and in_band:
+                    in_band = False; bands.append((band_start, r - 1))
+            if in_band:
+                bands.append((band_start, len(row_has_content) - 1))
 
-            # add a small padding
-            pad = 8
-            x0 = max(0, col_min - pad); y0 = max(0, row_min - pad)
-            x1 = min(img.width,  col_max + pad)
-            y1 = min(img.height, row_max + pad)
-            cw = x1 - x0; ch = y1 - y0
-
-            if cw < 2 or ch < 2:
-                messagebox.showinfo("Auto-crop", "Bounding box too small.")
+            if not bands:
+                messagebox.showinfo("Auto-crop", "Could not detect content bands.")
                 return
 
-            self.crop = (x0, y0, cw, ch)
-            self._crop_lbl.config(text=f"auto  x={x0}  y={y0}  w={cw}  h={ch}",
-                                   fg=C["accent"])
-            self._redraw_ov_canvas()
-            self._update_text_strip(self._ov_frame)
-            self._refresh_composite()
-            self._set_status(f"Auto-crop applied: {cw}×{ch} px at ({x0},{y0})")
+            # The Towns video layout (bottom of frame first):
+            #   band[-1] = timestamp (lowest / last band)
+            #   band[-2] = comment text (the one we want)
+            #   separator line is between them (or above the comment)
+            # If only one band exists, just use it (no timestamp visible).
+            if len(bands) >= 2:
+                # Use the second-to-last band (comment), skip last (timestamp)
+                y_top    = max(0, bands[-2][0] - 8)    # 8px padding above
+                y_bottom = min(first.height, bands[-2][1] + 8)
+            else:
+                y_top    = max(0, bands[0][0] - 8)
+                y_bottom = min(first.height, bands[0][1] + 8)
+
+            # Also keep any separator line that sits just above the comment
+            sep_check_top = max(0, y_top - 20)
+            sep_rows = row_has_content[sep_check_top:y_top]
+            if sep_rows.any():
+                y_top = max(0, sep_check_top + int(np.argmax(sep_rows)) - 4)
+
         except Exception as e:
-            messagebox.showerror("Auto-crop error", str(e))
+            messagebox.showerror("Auto-crop", f"Failed analysing first frame:\n{e}")
+            return
+
+        # ── Step 2: scan video for widest comment (background thread) ─────────
+        self._set_status("⏳  Scanning overlay for widest comment…  (every 30 s)")
+        self._auto_crop_btn_state("disabled")
+        h_ref    = first.height
+        w_ref    = first.width
+
+        def _scan():
+            def _progress(done, total):
+                pct = int(done / total * 100)
+                self.root.after(0, lambda: self._set_status(
+                    f"⏳  Scanning overlay…  {done}/{total} frames  ({pct}%)"))
+
+            col_min, col_max = scan_overlay_widths(
+                self.overlay_path, is_webm, status_cb=_progress)
+
+            if col_max <= col_min:
+                # fallback: use full width
+                col_min, col_max = 0, w_ref - 1
+
+            pad   = 8
+            x0    = max(0, col_min - pad)
+            x1    = min(w_ref, col_max + pad)
+            cw    = x1 - x0
+            ch    = y_bottom - y_top
+
+            def _apply():
+                self._auto_crop_btn_state("normal")
+                if cw < 2 or ch < 2:
+                    messagebox.showinfo("Auto-crop", "Bounding box too small.")
+                    return
+                self.crop = (x0, y_top, cw, ch)
+                self._crop_lbl.config(
+                    text=f"auto  x={x0}  y={y_top}  w={cw}  h={ch}",
+                    fg=C["accent"])
+                self._redraw_ov_canvas()
+                self._update_text_strip(self._ov_frame)
+                self._refresh_composite()
+                self._set_status(
+                    f"✅  Auto-crop applied: {cw}×{ch} px at ({x0},{y_top})"
+                    f"  —  comment line only, widest frame used for width")
+
+            self.root.after(0, _apply)
+
+        threading.Thread(target=_scan, daemon=True).start()
+
+    def _auto_crop_btn_state(self, state):
+        """Enable/disable the auto-crop button (stored ref needed)."""
+        try:
+            self._autocrop_btn.config(state=state,
+                bg=C["dim"] if state == "disabled" else C["orange"])
+        except Exception:
+            pass
 
     # ── LOG / STATUS ──────────────────────────────────────────────────────────
     def _log_append(self, msg):

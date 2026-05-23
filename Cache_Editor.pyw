@@ -1474,6 +1474,16 @@ class CacheEditor:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+def _find_db_in_folder(folder):
+    """Return list of .db files found alongside the script."""
+    try:
+        return [os.path.join(folder, f)
+                for f in sorted(os.listdir(folder))
+                if f.lower().endswith(".db") and
+                   os.path.isfile(os.path.join(folder, f))]
+    except Exception:
+        return []
+
 def main():
     parser = argparse.ArgumentParser(description="Cache Editor")
     parser.add_argument("--db",  default=None, help="Path to geocode_cache.db to open on startup")
@@ -1483,11 +1493,35 @@ def main():
     root = tk.Tk()
     app  = CacheEditor(root)
 
-    # Auto-load DB and/or GPX passed from the geocoder
+    # ── Resolve which DB to open ──────────────────────────────────────────────
+    db_to_load = None
+
     if args.db and os.path.exists(args.db):
-        root.after(300, lambda: app._autoload_db(args.db))
+        # Explicit path passed by the geocoder — always use it
+        db_to_load = args.db
+    else:
+        # Auto-discover: look for .db files in the script's own folder
+        script_folder = os.path.dirname(os.path.abspath(__file__))
+        found = _find_db_in_folder(script_folder)
+        if len(found) == 1:
+            db_to_load = found[0]
+        elif len(found) > 1:
+            # Multiple DBs: ask the user to pick one (after the window is ready)
+            def _ask_db():
+                choice = filedialog.askopenfilename(
+                    title="Multiple databases found — select one to open",
+                    initialdir=script_folder,
+                    filetypes=[("SQLite databases", "*.db"), ("All files", "*.*")])
+                if choice and os.path.exists(choice):
+                    app._autoload_db(choice)
+            root.after(400, _ask_db)
+
+    if db_to_load:
+        root.after(300, lambda: app._autoload_db(db_to_load))
+
+    # ── GPX passed from geocoder ──────────────────────────────────────────────
     if args.gpx and os.path.exists(args.gpx):
-        delay = 600 if args.db else 300
+        delay = 600 if db_to_load else 300
         root.after(delay, lambda: app._autoload_gpx(args.gpx))
 
     root.mainloop()
