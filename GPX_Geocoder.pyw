@@ -428,6 +428,13 @@ def extract_address_components_cached(conn: sqlite3.Connection, lat: float, lon:
         if _normalize_for_set(town) in CAPOLUOGHI_SET:
             province = ""
 
+    # ── Town alias corrections ────────────────────────────────────────────────
+    _TOWN_ALIASES = {
+        "vallecrosia al mare": "Vallecrosia",
+    }
+    if town and town.strip().lower() in _TOWN_ALIASES:
+        town = _TOWN_ALIASES[town.strip().lower()]
+
     road           = road or ""
     town           = town or ""
     province       = province or ""

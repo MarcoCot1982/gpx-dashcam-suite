@@ -213,7 +213,7 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
         while not pause_event.is_set():
             if stop_event.is_set():
                 stopped[0] = True
-                f2,a2 = plt.subplots(figsize=(fig_w,fig_h))
+                f2,a2 = plt.subplots(figsize=(fig_w,fig_h), dpi=100)
                 f2.patch.set_facecolor("black"); a2.set_axis_off()
                 img = mplfig_to_npimage(f2); plt.close(f2); return img
             time.sleep(0.05)
@@ -250,7 +250,7 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
         eta_s = time.strftime("%H:%M:%S", time.gmtime(eta))
         progress_cb(cf_total, total_frames_all, eta_s, ci, n_pts, cc, ct_str, use_flags)
 
-        fig,ax = plt.subplots(figsize=(fig_w,fig_h))
+        fig,ax = plt.subplots(figsize=(fig_w,fig_h), dpi=100)
         if transparent:
             fig.patch.set_facecolor("none"); ax.set_facecolor("none")
         else:
@@ -1371,10 +1371,8 @@ def resume_partial():
                         prev_acc = accumulator[0]
                         _ffmpeg_concat([prev_acc, chunk_file], new_acc)
 
-                        # Delete previous accumulator only if it's not the original partial
-                        # (we keep the original safe until it has been superseded)
-                        if prev_acc != partial_path:
-                            _del(prev_acc)
+                        # prev_acc has been fully consumed into new_acc — always delete it
+                        _del(prev_acc)
                         _del(chunk_file)
 
                         accumulator[0] = new_acc
@@ -1395,13 +1393,6 @@ def resume_partial():
 
             ok_all = not stopped[0]
             if ok_all:
-                # Delete the original partial — it has been fully consumed
-                if os.path.exists(partial_path) and partial_path != accumulator[0]:
-                    try:
-                        os.remove(partial_path)
-                        lcb(f"🗑  Deleted original partial: {os.path.basename(partial_path)}")
-                    except Exception as e:
-                        lcb(f"⚠  Could not delete original partial: {e}", "err")
                 lcb(f"✅  Resumed & merged → {os.path.basename(accumulator[0])}","ok")
                 ui_queue.put(("file_done", gpx_path, True))
                 ui_queue.put(("all_done", "Resume complete.", [accumulator[0]]))

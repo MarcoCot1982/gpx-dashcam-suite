@@ -147,28 +147,34 @@ def read_frame_at(path, t_sec, rgba=False):
     return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
 def _read_frame_rgba_ffmpeg(path, t_sec):
-    """Extract one RGBA frame from a video using ffmpeg subprocess.
-    This is the only reliable way to read VP9 alpha from WebM files."""
+    """Extract one RGBA frame via ffmpeg → temp PNG → PIL RGBA.
+    -vf format=rgba is essential: without it ffmpeg defaults to writing RGB PNG
+    even when decoding a yuva420p VP9+alpha stream, silently discarding alpha."""
+    tmp_path = None
     try:
-        w, h, fps, dur = video_info(path)
-        if w == 0 or h == 0:
-            return None
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
         cmd = [
             "ffmpeg", "-y",
             "-ss", f"{max(0, t_sec):.3f}",
             "-i", path,
             "-vframes", "1",
-            "-f", "rawvideo",
-            "-pix_fmt", "rgba",
-            "pipe:1"
+            "-vf", "format=rgba",   # force RGBA so alpha is written into the PNG
+            tmp_path
         ]
-        proc = subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW)
-        if proc.returncode != 0 or len(proc.stdout) < w * h * 4:
+        subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW)
+        if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
             return None
-        arr = np.frombuffer(proc.stdout[:w * h * 4], dtype=np.uint8).reshape(h, w, 4)
-        return Image.fromarray(arr, "RGBA")
+        img = Image.open(tmp_path).convert("RGBA")
+        img.load()   # force full decode before we delete the file
+        return img
     except Exception:
         return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try: os.unlink(tmp_path)
+            except: pass
 
 def scan_overlay_widths(path, is_webm, status_cb=None):
     """
@@ -317,10 +323,45 @@ class CompositorApp:
 
         body = tk.Frame(self.root, bg=C["bg"]); body.pack(fill="both", expand=True)
 
-        # ── LEFT SIDEBAR ─────────────────────────────────────────────────────
-        left = tk.Frame(body, bg=C["panel"], width=268)
-        left.pack(side="left", fill="y", padx=(10, 0), pady=10)
-        left.pack_propagate(False)
+        # ── LEFT SIDEBAR (scrollable) ─────────────────────────────────────────
+        left_outer = tk.Frame(body, bg=C["panel"], width=268)
+        left_outer.pack(side="left", fill="y", padx=(10, 0), pady=10)
+        left_outer.pack_propagate(False)
+
+        _left_canvas = tk.Canvas(left_outer, bg=C["panel"], highlightthickness=0)
+        _left_sb = ttk.Scrollbar(left_outer, orient="vertical",
+                                  command=_left_canvas.yview)
+        _left_canvas.configure(yscrollcommand=_left_sb.set)
+        _left_sb.pack(side="right", fill="y")
+        _left_canvas.pack(side="left", fill="both", expand=True)
+
+        left = tk.Frame(_left_canvas, bg=C["panel"])
+        _left_win = _left_canvas.create_window((0, 0), window=left, anchor="nw")
+
+        def _on_left_frame_cfg(e):
+            _left_canvas.configure(scrollregion=_left_canvas.bbox("all"))
+        def _on_left_canvas_cfg(e):
+            _left_canvas.itemconfig(_left_win, width=e.width)
+        left.bind("<Configure>", _on_left_frame_cfg)
+        _left_canvas.bind("<Configure>", _on_left_canvas_cfg)
+
+        # Mousewheel: only scroll when cursor is over the sidebar
+        def _sidebar_wheel(e):
+            try:
+                ox = left_outer.winfo_rootx(); ow = left_outer.winfo_width()
+                oy = left_outer.winfo_rooty(); oh = left_outer.winfo_height()
+                if ox <= e.x_root <= ox + ow and oy <= e.y_root <= oy + oh:
+                    units = int(-1 * (e.delta / 120)) if e.delta else (-1 if e.num == 4 else 1)
+                    _left_canvas.yview_scroll(units, "units")
+            except Exception:
+                pass
+        self.root.bind("<MouseWheel>", _sidebar_wheel, add="+")
+        self.root.bind("<Button-4>",   _sidebar_wheel, add="+")
+        self.root.bind("<Button-5>",   _sidebar_wheel, add="+")
+
+        # Force scrollregion after layout settles
+        self.root.after(200, lambda: _left_canvas.configure(
+            scrollregion=_left_canvas.bbox("all")))
 
         # — Files ——————————————————————————————————————————————————————————————
         sec_hdr(left, "FILES")
