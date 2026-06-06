@@ -660,7 +660,8 @@ def show_overlay(canvas, stop):
     cid, _ = _stop_circles.get(sid, (None, None))
     if cid: canvas.itemconfig(cid, outline=M["select"], width=4)
 
-    OW, OH = 304, 224
+    OW = 304
+    OH = 252 if sid == "gpxin" else 224
 
     ox = cx + STOP_R + 16
     if ox + OW > MAP_W - 8: ox = cx - STOP_R - 16 - OW
@@ -728,10 +729,70 @@ def show_overlay(canvas, stop):
         canvas.create_window(ox+OW-10, oy+OH-10, anchor="se",
                               window=btn, tags=OVERLAY_TAG)
     else:
-        canvas.create_text(ox+OW//2, oy+OH-28,
-                           text="Start with any .gpx file — no extraction needed.",
-                           font=("Times", 8, "italic"), fill=M["txt_lt"],
+        # ── GPX File stop: choose starting point ──────────────────────────────
+        canvas.create_text(ox+OW//2, oy+OH-170,
+                           text="Choose your first step:",
+                           font=("Times", 9, "bold italic"), fill=M["txt_md"],
                            tags=OVERLAY_TAG)
+
+        # Helper: small launch button
+        def _step_btn(label, filename, row_x, row_y, btn_w=130):
+            fpath = os.path.join(SCRIPT_DIR, filename)
+            avail = os.path.exists(fpath)
+            b = tk.Button(
+                canvas, text=label,
+                font=("Helvetica", 8, "bold"),
+                bg=(A["orange"] if avail else "#888888"), fg="black",
+                activebackground=M["rd_main"], activeforeground="white",
+                relief="flat", padx=6, pady=4,
+                cursor=("hand2" if avail else "arrow"),
+                state=("normal" if avail else "disabled"),
+                width=btn_w // 8,
+                command=(lambda f=filename: launch_app(f)) if avail else (lambda: None)
+            )
+            _ov_btns.append(b)
+            canvas.create_window(row_x, row_y, anchor="nw", window=b, tags=OVERLAY_TAG)
+            return b
+
+        bx1 = ox + 12
+        bx2 = ox + OW // 2 + 6
+        by  = oy + OH - 158
+
+        # Row 1: Ironer | Road Snap
+        _step_btn("\u25b6  GPX Ironer",  "GPX_ironer.pyw",  bx1, by)
+        _step_btn("\u25b6  Road Snap",   "Road_Snap.pyw",   bx2, by)
+
+        # Row 2: Geocoder (centred, full width)
+        fpath_gc = os.path.join(SCRIPT_DIR, "GPX_Geocoder.pyw")
+        avail_gc = os.path.exists(fpath_gc)
+        gc_btn = tk.Button(
+            canvas, text="\u25b6  GPX Geocoder",
+            font=("Helvetica", 8, "bold"),
+            bg=(A["orange"] if avail_gc else "#888888"), fg="black",
+            activebackground=M["rd_main"], activeforeground="white",
+            relief="flat", padx=6, pady=4, width=30,
+            cursor=("hand2" if avail_gc else "arrow"),
+            state=("normal" if avail_gc else "disabled"),
+            command=(lambda: launch_app("GPX_Geocoder.pyw")) if avail_gc else (lambda: None)
+        )
+        _ov_btns.append(gc_btn)
+        canvas.create_window(ox + OW // 2, by + 34, anchor="n",
+                              window=gc_btn, tags=OVERLAY_TAG)
+
+        # Separator: "if already geocoded"
+        sep_y = by + 76
+        canvas.create_line(ox+16, sep_y, ox+OW-16, sep_y,
+                           fill=M["contour"], width=1, tags=OVERLAY_TAG)
+        canvas.create_text(ox+OW//2, sep_y,
+                           text="  if GPX already geocoded  ",
+                           font=("Times", 8, "italic"),
+                           fill=M["txt_lt"], bg=M["paper"],
+                           tags=OVERLAY_TAG)
+
+        # Row 3: Towns Video | Overlay Comp.
+        by2 = sep_y + 12
+        _step_btn("\u25b6  Towns Video",    "Towns_video_dx.pyw",      bx1, by2, btn_w=130)
+        _step_btn("\u25b6  Overlay Comp.",  "Overlay_Compositor.pyw",  bx2, by2, btn_w=130)
 
     # ×  close button
     close_btn = tk.Button(canvas, text="\u00d7",

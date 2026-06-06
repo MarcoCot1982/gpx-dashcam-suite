@@ -394,26 +394,13 @@ def estimate_heading_delta_fx(flow: np.ndarray,
     Estimate heading change (degrees/step) from horizontal optical flow
     in the centre-right road zone (45–75% height, 45–65% width).
 
-    This is the empirically best method for EIS dashcam footage:
-      - Calibrated RMSE: 31.5° over 30s test clip
-      - Total turn magnitude error: 3% (1.03x)
-      - Smooth window: applied externally via fx_buf in process_video
-
-    Physics: at u ≈ cx (image centre), horizontal flow from yaw ω is:
-        flow_x = fy * ω  (depth-independent)
-    EIS adds a uniform translation dx_EIS to all pixels.
-    The MEAN flow_x in this zone ≈ fy*ω + dx_EIS.
-    We cannot separate them, BUT with a long smoothing window (30 steps ≈ 1s)
-    the EIS component averages toward zero (it is a zero-mean oscillation).
-    The real yaw integrates to the correct net turn.
-
-    Calibration (empirical on reference dashcam with EIS):
-        sensitivity=1.0 → cal = -1.4729 deg/px
-        (negative because positive flow_x = objects moving right = left turn
-         = negative heading change in compass terms)
+    Empirical calibration on reference dashcam footage (2016-12-19):
+      CAL_BASE = -1.027  (corrected from -1.4729 after measuring 1.43x over-turn)
+      Total turn error: ~3%  |  RMSE: ~31°
 
     sensitivity=0 → locked heading.
-    Users tune sensitivity up for faster turns, down to reduce noise on straight roads.
+    sensitivity=1.0 → calibrated (recommended starting point).
+    Tune up for more responsive turns, down to reduce noise.
     """
     if sensitivity == 0.0:
         return 0.0
@@ -425,9 +412,7 @@ def estimate_heading_delta_fx(flow: np.ndarray,
     col_hi = int(w_px * 0.65)
 
     fx = float(np.mean(flow[row_lo:row_hi, col_lo:col_hi, 0]))
-
-    # Empirical calibration: -1.4729 deg/px at sensitivity=1.0
-    CAL_BASE = -1.4729
+    CAL_BASE = -1.027
     return fx * CAL_BASE * sensitivity
 
 
@@ -604,7 +589,15 @@ def process_video(video_path, start_lat, start_lon, initial_heading,
                 if len(fx_buf) > HDG_SMOOTH_WIN:
                     fx_buf.pop(0)
                 smooth_delta = float(np.mean(fx_buf))
-                heading = (heading + smooth_delta) % 360.0
+
+                # Mean-reversion decay: on straight sections the EIS residual
+                # slowly drifts the heading. A 2% pull toward initial_heading
+                # per step corrects this without fighting real turns.
+                # After 50 zero-input steps (~10s at 5fps) heading is 63% back.
+                DECAY = 0.98
+                heading = (heading * DECAY
+                           + initial_heading * (1.0 - DECAY)
+                           + smooth_delta) % 360.0
 
             if dist_step > 0:
                 lat, lon = move_point(lat, lon, heading, dist_step)
@@ -701,14 +694,10 @@ autocenter_var = tk.BooleanVar(value=True)
 # ─────────────────────────────────────────────────────────────────────────────
 def open_map_picker():
     """
-    Modal dialog:
-      1. Search bar (Nominatim) — type town/address, press Enter or click Search.
-         Results shown as a small dropdown; click one to pan the map.
-      2. Click the map → place START marker (green pin).
-      3. After placing the start, a live amber arrow is drawn on the canvas,
-         rotating in real time as the mouse moves.
-         Click anywhere to LOCK the heading shown by the arrow.
-      4. Confirm & Apply writes lat / lon / heading back to the sidebar.
+    Modal map picker — clean rewrite.
+    Step 1: click map → green START pin.
+    Step 2: move mouse → arrow rotates live. Click → lock heading.
+    Search bar pans map; click anywhere to place start.
     """
     d = tk.Toplevel(root)
     d.title("Pick Start Position & Heading")
@@ -718,112 +707,14 @@ def open_map_picker():
     _apply_icon(d)
 
     # ── state ──────────────────────────────────────────────────────────────
-    ps = {
-        "step":           0,       # 0=place start, 1=rotate arrow, 2=locked
-        "start":          None,    # (lat, lon)
-        "heading":        0.0,
-        "start_marker":   None,
-        "search_marker":  None,    # blue pin from search result (draggable)
-        "press_x":        0,
-        "press_y":        0,
-        "arrow_pending":  False,   # True = waiting for canvas to resolve before drawing
-        # canvas arrow items
-        "arrow_shaft":    None,
-        "arrow_head":     None,
-        "arrow_circle":   None,
-        "arrow_label":    None,
-        "arrow_hint":     None,
+    st = {
+        "step":          0,      # 0=place start  1=aim arrow  2=locked
+        "start":         None,   # (lat, lon)
+        "heading":       0.0,
+        "start_marker":  None,
+        "press_x":       0,
+        "press_y":       0,
     }
-
-    # ── helpers ────────────────────────────────────────────────────────────
-    def _delete_arrow():
-        ov = ps.get("overlay")
-        if ov:
-            try: ov.delete("arrow")
-            except Exception: pass
-
-    def _draw_arrow(cx, cy, heading_deg, locked=False):
-        """Draw the heading arrow on the persistent overlay canvas."""
-        _delete_arrow()
-        ov = ps.get("overlay")
-        if ov is None:
-            return
-
-        rad    = math.radians(heading_deg)
-        tip_x  = cx + ARROW_LENGTH * math.sin(rad)
-        tip_y  = cy - ARROW_LENGTH * math.cos(rad)
-        stub   = ARROW_LENGTH * 0.18
-        base_x = cx - stub * math.sin(rad)
-        base_y = cy + stub * math.cos(rad)
-
-        color  = C["accent"] if locked else "#ffe066"
-        lwidth = ARROW_WIDTH + 1 if locked else ARROW_WIDTH
-
-        # Drop-shadow
-        sh = 2
-        ov.create_line(base_x+sh, base_y+sh, tip_x+sh, tip_y+sh,
-                       fill="#000000", width=lwidth+3, tags="arrow")
-
-        # Shaft
-        ov.create_line(base_x, base_y, tip_x, tip_y,
-                       fill=color, width=lwidth, tags="arrow")
-
-        # Arrowhead
-        perp_x = math.cos(rad) * (ARROW_HEAD_W / 2)
-        perp_y = math.sin(rad) * (ARROW_HEAD_W / 2)
-        back_x = tip_x - ARROW_HEAD * math.sin(rad)
-        back_y = tip_y + ARROW_HEAD * math.cos(rad)
-        ov.create_polygon(tip_x, tip_y,
-                          back_x + perp_x, back_y + perp_y,
-                          back_x - perp_x, back_y - perp_y,
-                          fill=color, outline="", tags="arrow")
-
-        # Centre dot (marks exact start position)
-        ov.create_oval(cx - CIRCLE_R - 1, cy - CIRCLE_R - 1,
-                       cx + CIRCLE_R + 1, cy + CIRCLE_R + 1,
-                       fill="#000000", outline="", tags="arrow")
-        ov.create_oval(cx - CIRCLE_R, cy - CIRCLE_R,
-                       cx + CIRCLE_R, cy + CIRCLE_R,
-                       fill=C["green"], outline="white", width=2, tags="arrow")
-
-        # Heading label
-        cmp = compass_label(heading_deg)
-        lx   = tip_x + 16 * math.sin(rad)
-        ly   = tip_y - 16 * math.cos(rad)
-        anch = "w" if math.sin(rad) >= 0 else "e"
-        ov.create_text(lx+1, ly+1, text=f"{heading_deg:.0f}°  {cmp}",
-                       fill="#000000", font=("Consolas", 10, "bold"),
-                       anchor=anch, tags="arrow")
-        ov.create_text(lx, ly, text=f"{heading_deg:.0f}°  {cmp}",
-                       fill=color, font=("Consolas", 10, "bold"),
-                       anchor=anch, tags="arrow")
-
-        # Hint (only while unlocked)
-        if not locked:
-            ov.create_text(cx, cy + ARROW_LENGTH + 28,
-                           text="move mouse to aim  ·  click to lock",
-                           fill=C["muted"], font=("Consolas", 8), tags="arrow")
-
-    def _start_canvas_xy():
-        """Return canvas (x, y) for the current start position, or None."""
-        if ps["start"] is None:
-            return None
-        return latlon_to_canvas(pm, ps["start"][0], ps["start"][1])
-
-    def _update_arrow_from_mouse(mx, my):
-        """Called on every mouse-move while in step 1 (rotating)."""
-        sc = _start_canvas_xy()
-        if sc is None:
-            return
-        sx, sy = sc
-        dx, dy = mx - sx, my - sy
-        if abs(dx) < 1 and abs(dy) < 1:
-            return
-        # atan2: x=east, y=south on canvas  →  heading = atan2(dx, -dy)
-        heading = math.degrees(math.atan2(dx, -dy)) % 360.0
-        ps["heading"] = heading
-        _draw_arrow(sx, sy, heading, locked=False)
-        hdg_info.config(text=f"Heading  {heading:.1f}°  {compass_label(heading)}")
 
     # ── top chrome ─────────────────────────────────────────────────────────
     tk.Frame(d, bg=C["accent"], height=3).pack(fill="x")
@@ -831,141 +722,86 @@ def open_map_picker():
     tk.Label(hdr, text="PICK START POSITION  &  HEADING",
              font=("Consolas", 11, "bold"),
              bg=C["bg"], fg=C["accent"]).pack(side="left")
-
-    # Zoom buttons (top-right of header)
-    zf2 = tk.Frame(hdr, bg=C["bg"]); zf2.pack(side="right")
-    mk_btn(zf2, "＋", C["panel2"], lambda: pm.set_zoom(min(pm.zoom + 1, 19)),
-            font=("Consolas", 11, "bold")).pack(side="right", padx=2)
-    mk_btn(zf2, "－", C["panel2"], lambda: pm.set_zoom(max(pm.zoom - 1, 2)),
-            font=("Consolas", 11, "bold")).pack(side="right", padx=2)
-
+    zf = tk.Frame(hdr, bg=C["bg"]); zf.pack(side="right")
+    mk_btn(zf, "＋", C["panel2"],
+           lambda: (pm.set_zoom(min(pm.zoom+1, 19))),
+           font=("Consolas", 11, "bold")).pack(side="right", padx=2)
+    mk_btn(zf, "－", C["panel2"],
+           lambda: (pm.set_zoom(max(pm.zoom-1, 2))),
+           font=("Consolas", 11, "bold")).pack(side="right", padx=2)
     tk.Frame(d, bg=C["border"], height=1).pack(fill="x")
 
-    # ── SEARCH BAR ─────────────────────────────────────────────────────────
-    search_frame = tk.Frame(d, bg=C["panel2"])
-    search_frame.pack(fill="x", padx=10, pady=(6, 0))
-
-    tk.Label(search_frame, text="🔍", font=("Consolas", 11),
+    # ── search bar ─────────────────────────────────────────────────────────
+    sf = tk.Frame(d, bg=C["panel2"]); sf.pack(fill="x", padx=10, pady=(6, 0))
+    tk.Label(sf, text="🔍", font=("Consolas", 11),
              bg=C["panel2"], fg=C["accent"]).pack(side="left", padx=(10, 4))
-
     search_var = tk.StringVar()
-    search_entry = tk.Entry(search_frame, textvariable=search_var,
-                             font=("Consolas", 10),
-                             bg=C["panel2"], fg=C["text"],
-                             insertbackground=C["text"],
-                             relief="flat", highlightthickness=0)
+    search_entry = tk.Entry(sf, textvariable=search_var,
+                            font=("Consolas", 10),
+                            bg=C["panel2"], fg=C["text"],
+                            insertbackground=C["text"],
+                            relief="flat", highlightthickness=0)
     search_entry.pack(side="left", fill="x", expand=True, ipady=6)
-
-    search_status = tk.Label(search_frame, text="",
-                              font=("Consolas", 8), bg=C["panel2"],
-                              fg=C["muted"])
+    search_status = tk.Label(sf, text="", font=("Consolas", 8),
+                              bg=C["panel2"], fg=C["muted"])
     search_status.pack(side="left", padx=8)
-
-    mk_btn(search_frame, "Search", C["blue"],
-            lambda: _do_search(),
+    mk_btn(sf, "Search", C["blue"], lambda: _do_search(),
             font=("Consolas", 8, "bold")).pack(side="right", padx=6, pady=4)
 
-    # Results dropdown — floats over the map directly below the search bar.
-    # We use place() so it never disrupts the layout of other widgets.
-    results_frame = tk.Frame(d, bg=C["accent"], padx=1, pady=1)
-    results_inner = tk.Frame(results_frame, bg=C["panel2"])
-    results_inner.pack(fill="both", expand=True)
-    results_lb = tk.Listbox(results_inner,
+    # Results listbox (hidden until search)
+    results_frame = tk.Frame(d, bg=C["panel"])
+    results_lb = tk.Listbox(results_frame,
                              bg=C["panel2"], fg=C["text"],
                              selectbackground=C["accent"],
                              selectforeground="black",
-                             font=("Consolas", 9),
-                             activestyle="none",
-                             relief="flat", borderwidth=0,
-                             height=0)
+                             font=("Consolas", 8), activestyle="none",
+                             relief="flat", borderwidth=0, height=0)
     results_lb.pack(fill="x")
-    _search_results = []   # list of {"display_name", "lat", "lon"}
-
-    def _place_results_below_search():
-        """Position the floating results panel immediately below the search bar."""
-        d.update_idletasks()
-        sf_x = search_frame.winfo_x()
-        sf_y = search_frame.winfo_y()
-        sf_h = search_frame.winfo_height()
-        sf_w = search_frame.winfo_width()
-        results_frame.place(x=sf_x, y=sf_y + sf_h, width=sf_w)
-        results_frame.lift()   # float above all other widgets
+    _search_results = []
 
     def _hide_results():
         results_lb.delete(0, tk.END)
         results_frame.place_forget()
 
-    def _do_search():
-        query = search_var.get().strip()
-        if not query:
-            return
-        search_status.config(text="searching…", fg=C["muted"])
+    def _show_results():
         d.update_idletasks()
+        x = sf.winfo_x(); y = sf.winfo_y() + sf.winfo_height()
+        results_frame.place(x=x, y=y, width=sf.winfo_width())
+        results_frame.lift()
 
+    def _do_search():
+        q = search_var.get().strip()
+        if not q: return
+        search_status.config(text="…", fg=C["muted"])
+        d.update_idletasks()
         def _thread():
-            res = nominatim_search(query)
+            res = nominatim_search(q)
             d.after(0, lambda: _on_search_done(res))
-
         threading.Thread(target=_thread, daemon=True).start()
 
     def _on_search_done(res):
-        _search_results.clear()
-        _search_results.extend(res)
+        _search_results.clear(); _search_results.extend(res)
         results_lb.delete(0, tk.END)
-
         if not res:
             search_status.config(text="no results", fg=C["red"])
-            _hide_results()
             return
-
         search_status.config(text=f"{len(res)} result(s)", fg=C["green"])
         for r in res:
-            # Shorten display: first two comma-separated parts
-            name = r["display_name"]
-            short = ", ".join(name.split(",")[:3]).strip()
+            short = ", ".join(r["display_name"].split(",")[:3])
             results_lb.insert(tk.END, "  " + short)
-
         results_lb.config(height=min(len(res), 5))
-        # Float results panel directly below search bar
-        _place_results_below_search()
+        _show_results()
 
     def _on_result_select(event=None):
         sel = results_lb.curselection()
-        if not sel:
-            return
+        if not sel: return
         r = _search_results[sel[0]]
-        lat, lon = r["lat"], r["lon"]
         try:
-            pm.set_position(lat, lon)
+            pm.set_position(r["lat"], r["lon"])
             pm.set_zoom(15)
-            _hide_results()
-            search_status.config(text="")
-        except Exception:
-            pass
-
-        # Place a blue suggestion pin — user still needs to click
-        # to confirm the exact start position (keeps the UX unambiguous)
-        if ps["search_marker"]:
-            try: ps["search_marker"].delete()
-            except Exception: pass
-            ps["search_marker"] = None
-
-        try:
-            ps["search_marker"] = pm.set_marker(
-                lat, lon,
-                text="? click to confirm",
-                marker_color_circle=C["blue"],
-                marker_color_outside="#0d47a1")
-        except Exception:
-            pass
-
-        # Stay in step 0: the suggestion shows WHERE to click,
-        # but the user must click the map to set the actual start.
-        coord_lbl.config(
-            text=f"Suggestion:  {lat:.6f},  {lon:.6f}  — click map to confirm")
-        instr_var.set(
-            "Search result shown (blue pin)  —  "
-            "click the map to place your START point, or click elsewhere to refine")
+        except Exception: pass
+        _hide_results()
+        search_status.config(text="")
 
     results_lb.bind("<<ListboxSelect>>", _on_result_select)
     results_lb.bind("<Return>",          _on_result_select)
@@ -973,287 +809,212 @@ def open_map_picker():
     search_entry.bind("<Escape>",        lambda e: _hide_results())
 
     # ── instruction bar ────────────────────────────────────────────────────
-    instr_frame = tk.Frame(d, bg=C["panel"], height=34)
+    instr_frame = tk.Frame(d, bg=C["panel"], height=32)
     instr_frame.pack(fill="x", pady=(6, 0))
     instr_frame.pack_propagate(False)
-
-    step_dot = tk.Label(instr_frame, text="●",
-                         font=("Consolas", 11), bg=C["panel"], fg=C["green"])
+    step_dot = tk.Label(instr_frame, text="●", font=("Consolas", 11),
+                         bg=C["panel"], fg=C["green"])
     step_dot.pack(side="left", padx=(14, 6))
-
     instr_var = tk.StringVar(
-        value="Step 1  —  Search for a location above, then click the map to place the START point")
+        value="Click anywhere on the map to place the START point")
     tk.Label(instr_frame, textvariable=instr_var,
               font=("Consolas", 8), bg=C["panel"], fg=C["text"],
               anchor="w").pack(side="left", fill="x", expand=True)
 
     # ── map ────────────────────────────────────────────────────────────────
-    # Arrow is drawn on a separate overlay Canvas stacked above tkintermapview.
-    # tkintermapview never touches it, so the arrow persists across tile reloads.
-    # Panning/zooming: we forward drag events from the overlay to pm.canvas.
-    # Click detection: press+release with drag-guard, on the overlay only.
     map_border = tk.Frame(d, bg=C["accent"], padx=2, pady=2)
     map_border.pack(fill="both", expand=True, padx=10, pady=(4, 0))
-
-    map_stack = tk.Frame(map_border, bg="black")
-    map_stack.pack(fill="both", expand=True)
-
-    pm = tkintermapview.TkinterMapView(map_stack, corner_radius=0)
-    pm.place(relx=0, rely=0, relwidth=1, relheight=1)
+    pm = tkintermapview.TkinterMapView(map_border, corner_radius=0)
+    pm.pack(fill="both", expand=True)
     pm.set_tile_server("https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
-
     try:
         pm.set_position(float(lat_var.get()), float(lon_var.get()))
-        pm.set_zoom(13)
+        pm.set_zoom(14)
     except ValueError:
         pm.set_position(40.0, -3.7); pm.set_zoom(4)
 
-    # Overlay canvas — arrow lives here permanently
-    ov = tk.Canvas(map_stack, bg="", highlightthickness=0)
-    ov.place(relx=0, rely=0, relwidth=1, relheight=1)
-    ps["overlay"] = ov
-
-    # ── forward pan/zoom from overlay to the map ───────────────────────────
-    # Strategy: DON'T forward ButtonPress to pm.canvas.
-    # tkintermapview's native bindings on pm.canvas still fire (add="+")
-    # so panning works natively. The overlay ONLY handles:
-    #   • drag-guard click detection (our press_x/y for threshold check)
-    #   • mouse-motion heading aim
-    # Scroll-wheel IS forwarded since it targets the widget under cursor.
-    _pan_active = [False]
-
-    def _ov_press(e):
-        ps["press_x"] = e.x
-        ps["press_y"] = e.y
-        _pan_active[0] = False
-
-    def _ov_motion(e):
-        dx = abs(e.x - ps["press_x"])
-        dy = abs(e.y - ps["press_y"])
-        if dx > DRAG_THRESHOLD or dy > DRAG_THRESHOLD:
-            _pan_active[0] = True
-        # Update heading arrow live while button held in step 1
-        if not _pan_active[0] and ps["step"] == 1:
-            _update_arrow_from_mouse(e.x, e.y)
-
-    def _ov_release(e):
-        was_pan = _pan_active[0]
-        _pan_active[0] = False
-        if was_pan:
-            # Pan finished — redraw arrow at new position
-            d.after(150, _on_map_move)
-            return
-        # Genuine click — process it
-        _on_release(e)
-
-    def _ov_motion_passive(e):
-        """Pure mouse-move (no button) — update heading arrow aim."""
-        if ps["step"] == 1:
-            _update_arrow_from_mouse(e.x, e.y)
-
-    def _ov_scroll(e):
-        # Forward scroll to map canvas so zoom still works
-        pm.canvas.event_generate("<MouseWheel>", x=e.x, y=e.y, delta=e.delta)
-        d.after(150, _on_map_move)
-
-    def _ov_scroll_linux(e):
-        btn = "<Button-4>" if e.num == 4 else "<Button-5>"
-        pm.canvas.event_generate(btn, x=e.x, y=e.y)
-        d.after(150, _on_map_move)
-
-    # Overlay handles our events; pm.canvas handles native map pan/zoom
-    ov.bind("<ButtonPress-1>",   _ov_press)
-    ov.bind("<B1-Motion>",       _ov_motion)
-    ov.bind("<ButtonRelease-1>", _ov_release)
-    ov.bind("<Motion>",          _ov_motion_passive)
-    ov.bind("<MouseWheel>",      _ov_scroll)
-    ov.bind("<Button-4>",        _ov_scroll_linux)
-    ov.bind("<Button-5>",        _ov_scroll_linux)
-
-    # After pan/zoom redraws from pm.canvas configure events
-    pm.canvas.bind("<Configure>", lambda e: d.after(200, _on_map_move), add="+")
-
-    # ── info / button bar ──────────────────────────────────────────────────
+    # ── info bar ───────────────────────────────────────────────────────────
     info_bar = tk.Frame(d, bg=C["panel2"], height=44)
     info_bar.pack(fill="x", padx=10, pady=(4, 0))
     info_bar.pack_propagate(False)
-
     coord_lbl = tk.Label(info_bar, text="—",
-                          font=("Consolas", 9), bg=C["panel2"], fg=C["muted"])
+                          font=("Consolas", 9),
+                          bg=C["panel2"], fg=C["muted"])
     coord_lbl.pack(side="left", padx=14)
-
-    hdg_info = tk.Label(info_bar, text="",
-                         font=("Consolas", 10, "bold"),
-                         bg=C["panel2"], fg=C["accent"])
-    hdg_info.pack(side="left", padx=20)
-
-    btn_bar = tk.Frame(info_bar, bg=C["panel2"])
-    btn_bar.pack(side="right", padx=10)
+    hdg_lbl = tk.Label(info_bar, text="",
+                        font=("Consolas", 10, "bold"),
+                        bg=C["panel2"], fg=C["accent"])
+    hdg_lbl.pack(side="left", padx=14)
+    bb = tk.Frame(info_bar, bg=C["panel2"]); bb.pack(side="right", padx=10)
 
     def _reset():
-        ps["step"] = 0
-        ps["start"] = None
-        ps["heading"] = 0.0
-        ps["arrow_pending"] = False
-        for key in ("start_marker", "search_marker"):
-            if ps[key]:
-                try: ps[key].delete()
-                except Exception: pass
-                ps[key] = None
-        _delete_arrow()
-        confirm_btn.config(state="disabled", bg=C["dim"], fg=C["muted"])
-        coord_lbl.config(text="—")
-        hdg_info.config(text="")
+        st["step"] = 0; st["start"] = None; st["heading"] = 0.0
+        if st["start_marker"]:
+            try: st["start_marker"].delete()
+            except Exception: pass
+            st["start_marker"] = None
+        coord_lbl.config(text="—"); hdg_lbl.config(text="")
         step_dot.config(fg=C["green"])
-        instr_var.set(
-            "Step 1  —  Search for a location above, then click the map to place the START point")
+        confirm_btn.config(state="disabled", bg=C["dim"], fg=C["muted"])
+        instr_var.set("Click anywhere on the map to place the START point")
 
-    mk_btn(btn_bar, "↺  Reset", C["dim"], _reset,
+    mk_btn(bb, "↺ Reset",         C["dim"],   _reset,
             font=("Consolas", 8, "bold")).pack(side="left", padx=(0, 6))
-
-    confirm_btn = mk_btn(btn_bar, "✓  Confirm & Apply", C["green"],
-                          lambda: None, state="disabled",
-                          font=("Consolas", 9, "bold"))
+    confirm_btn = mk_btn(bb, "✓ Confirm & Apply", C["green"], lambda: None,
+                          state="disabled", font=("Consolas", 9, "bold"))
     confirm_btn.pack(side="left", padx=(0, 6))
-
-    mk_btn(btn_bar, "Cancel", C["dim"], d.destroy,
+    mk_btn(bb, "Cancel",          C["dim"],   d.destroy,
             font=("Consolas", 8, "bold")).pack(side="left")
-
     tk.Frame(d, bg=C["accent"], height=3).pack(fill="x", side="bottom")
 
-    # ── confirm ────────────────────────────────────────────────────────────
     def _confirm():
-        if ps["start"] is None:
+        if st["start"] is None:
             messagebox.showwarning("No position", "Place a start point first.", parent=d)
             return
-        slat, slon = ps["start"]
+        slat, slon = st["start"]
         lat_var.set(f"{slat:.7f}")
         lon_var.set(f"{slon:.7f}")
-        heading_var.set(f"{ps['heading']:.1f}")
-        cmp = compass_label(ps["heading"])
+        heading_var.set(f"{st['heading']:.1f}")
         status_lbl.config(
-            text=f"Start ({slat:.6f}, {slon:.6f})  ·  heading {ps['heading']:.1f}° {cmp}")
+            text=f"Start ({slat:.6f}, {slon:.6f})  ·  "
+                 f"heading {st['heading']:.1f}° {compass_label(st['heading'])}")
         d.destroy()
 
     confirm_btn.config(command=_confirm)
 
-    # ── MOUSE MOTION → rotate arrow ────────────────────────────────────────
-    # ── MAP CLICK HANDLING (press + release + drag guard) ─────────────────
+    # ── arrow drawing — directly on pm.canvas, tag-based ──────────────────
+    # tkintermapview calls canvas.delete("all") on every tile redraw.
+    # We redraw every 100ms so the arrow is never gone for more than a blink.
 
-    def _on_release(event):
-        if (abs(event.x - ps["press_x"]) > DRAG_THRESHOLD or
-                abs(event.y - ps["press_y"]) > DRAG_THRESHOLD):
-            return  # was a pan drag
+    def _canvas_xy():
+        """lat/lon of start → (cx,cy) on pm.canvas, or None."""
+        if st["start"] is None: return None
+        return latlon_to_canvas(pm, st["start"][0], st["start"][1])
 
-        lat, lon = canvas_to_latlon(pm, event.x, event.y)
-        if lat is None:
-            return
+    def _draw_arrow(cx, cy, hdg_deg, locked=False):
+        c = pm.canvas
+        c.delete("picker_arrow")
+        rad    = math.radians(hdg_deg)
+        tip_x  = cx + ARROW_LENGTH * math.sin(rad)
+        tip_y  = cy - ARROW_LENGTH * math.cos(rad)
+        base_x = cx - ARROW_LENGTH * 0.18 * math.sin(rad)
+        base_y = cy + ARROW_LENGTH * 0.18 * math.cos(rad)
+        col    = C["accent"] if locked else "#ffe066"
+        lw     = ARROW_WIDTH + 1 if locked else ARROW_WIDTH
+        sh = 2
+        c.create_line(base_x+sh, base_y+sh, tip_x+sh, tip_y+sh,
+                      fill="#000000", width=lw+3, tags="picker_arrow")
+        c.create_line(base_x, base_y, tip_x, tip_y,
+                      fill=col, width=lw, tags="picker_arrow")
+        px = math.cos(rad)*(ARROW_HEAD_W/2)
+        py = math.sin(rad)*(ARROW_HEAD_W/2)
+        bx = tip_x - ARROW_HEAD*math.sin(rad)
+        by = tip_y + ARROW_HEAD*math.cos(rad)
+        c.create_polygon(tip_x, tip_y, bx+px, by+py, bx-px, by-py,
+                         fill=col, outline="", tags="picker_arrow")
+        c.create_oval(cx-CIRCLE_R-1, cy-CIRCLE_R-1,
+                      cx+CIRCLE_R+1, cy+CIRCLE_R+1,
+                      fill="#000000", outline="", tags="picker_arrow")
+        c.create_oval(cx-CIRCLE_R, cy-CIRCLE_R,
+                      cx+CIRCLE_R, cy+CIRCLE_R,
+                      fill=C["green"], outline="white", width=2,
+                      tags="picker_arrow")
+        anch = "w" if math.sin(rad) >= 0 else "e"
+        lx = tip_x + 16*math.sin(rad); ly = tip_y - 16*math.cos(rad)
+        c.create_text(lx+1, ly+1,
+                      text=f"{hdg_deg:.0f}°  {compass_label(hdg_deg)}",
+                      fill="#000000", font=("Consolas", 10, "bold"),
+                      anchor=anch, tags="picker_arrow")
+        c.create_text(lx, ly,
+                      text=f"{hdg_deg:.0f}°  {compass_label(hdg_deg)}",
+                      fill=col, font=("Consolas", 10, "bold"),
+                      anchor=anch, tags="picker_arrow")
+        if not locked:
+            c.create_text(cx, cy + ARROW_LENGTH + 28,
+                          text="move mouse to aim  ·  click to lock",
+                          fill=C["muted"], font=("Consolas", 8),
+                          tags="picker_arrow")
 
-        if ps["step"] == 0:
-            # ── Place START ────────────────────────────────────────────────
-            ps["start"] = (lat, lon)
-            # Remove search-result suggestion pin if present
-            if ps["search_marker"]:
-                try: ps["search_marker"].delete()
+    # ── poll: redraw arrow every 100ms (survives tile-reload erasure) ──────
+    def _poll():
+        if not d.winfo_exists(): return
+        if st["step"] in (1, 2) and st["start"] is not None:
+            sc = _canvas_xy()
+            if sc is not None:
+                _draw_arrow(sc[0], sc[1], st["heading"],
+                            locked=(st["step"] == 2))
+        d.after(100, _poll)
+
+    d.after(150, _poll)
+
+    # ── heading update from mouse position ─────────────────────────────────
+    def _aim(mx, my):
+        sc = _canvas_xy()
+        if sc is None: return
+        dx, dy = mx - sc[0], my - sc[1]
+        if abs(dx) < 1 and abs(dy) < 1: return
+        st["heading"] = math.degrees(math.atan2(dx, -dy)) % 360.0
+        hdg_lbl.config(
+            text=f"{st['heading']:.0f}°  {compass_label(st['heading'])}")
+
+    # ── pm.canvas click detection (coexists with native pan via add="+") ───
+    def _on_press(e):
+        st["press_x"] = e.x; st["press_y"] = e.y
+
+    def _on_release(e):
+        if (abs(e.x - st["press_x"]) > DRAG_THRESHOLD or
+                abs(e.y - st["press_y"]) > DRAG_THRESHOLD):
+            return  # was a pan — ignore
+        lat, lon = canvas_to_latlon(pm, e.x, e.y)
+        if lat is None: return
+
+        if st["step"] == 0:
+            st["start"] = (lat, lon)
+            if st["start_marker"]:
+                try: st["start_marker"].delete()
                 except Exception: pass
-                ps["search_marker"] = None
-            if ps["start_marker"]:
-                try: ps["start_marker"].delete()
-                except Exception: pass
-                ps["start_marker"] = None
-            ps["start_marker"] = pm.set_marker(
+            st["start_marker"] = pm.set_marker(
                 lat, lon, text="START",
                 marker_color_circle=C["green"],
                 marker_color_outside="#1b5e20")
-            coord_lbl.config(text=f"Start:  {lat:.7f},  {lon:.7f}")
+            coord_lbl.config(text=f"{lat:.6f},  {lon:.6f}")
             step_dot.config(fg=C["accent"])
             instr_var.set(
-                "Step 2  —  Move mouse over the map to aim the heading arrow, then click to lock")
-            ps["step"] = 1
-            ps["heading"] = 0.0
-            ps["arrow_pending"] = True
-            # Retry drawing arrow after layout settles
-            d.after(100, _on_map_move)
-            d.after(400, _on_map_move)
-            d.after(800, _on_map_move)
+                "Move mouse to aim the arrow, then click to lock heading")
+            st["step"] = 1
+            st["heading"] = 0.0
             confirm_btn.config(state="normal", bg=C["orange"], fg="white")
 
-        elif ps["step"] == 1:
-            # ── Lock heading — also upgrade search pin to green START ──────
-            # If we're still on a search pin rather than a manually clicked point,
-            # the user accepted the search location — upgrade the marker.
-            if ps["search_marker"] and not ps["start_marker"]:
-                try: ps["search_marker"].delete()
-                except Exception: pass
-                ps["search_marker"] = None
-                try:
-                    slat, slon = ps["start"]
-                    ps["start_marker"] = pm.set_marker(
-                        slat, slon, text="START",
-                        marker_color_circle=C["green"],
-                        marker_color_outside="#1b5e20")
-                except Exception:
-                    pass
-            sc = _start_canvas_xy()
+        elif st["step"] == 1:
+            _aim(e.x, e.y)
+            sc = _canvas_xy()
             if sc is not None:
-                _update_arrow_from_mouse(event.x, event.y)
-                _draw_arrow(sc[0], sc[1], ps["heading"], locked=True)
-            cmp = compass_label(ps["heading"])
+                _draw_arrow(sc[0], sc[1], st["heading"], locked=True)
+            cmp = compass_label(st["heading"])
             step_dot.config(fg=C["green"])
             instr_var.set(
-                f"Heading locked at {ps['heading']:.1f}° ({cmp})  "
-                "— click again to re-aim, or Confirm")
+                f"Heading {st['heading']:.0f}° ({cmp})  "
+                "— click to re-aim, or Confirm")
             confirm_btn.config(state="normal", bg=C["green"], fg="white")
-            ps["step"] = 2
+            st["step"] = 2
 
-        elif ps["step"] == 2:
-            # ── Re-aim ────────────────────────────────────────────────────
-            ps["step"] = 1
+        elif st["step"] == 2:
+            st["step"] = 1
             step_dot.config(fg=C["accent"])
-            instr_var.set(
-                "Step 2  —  Move mouse to aim the heading arrow, then click to lock")
+            instr_var.set("Move mouse to re-aim, then click to lock")
             confirm_btn.config(state="normal", bg=C["orange"], fg="white")
 
-    # Redraw arrow on pan/zoom
-    def _on_map_move(event=None):
-        if ps["step"] not in (1, 2) or ps["start"] is None:
-            return
-        sc = _start_canvas_xy()
-        if sc is not None:
-            ps["arrow_pending"] = False
-            _draw_arrow(sc[0], sc[1], ps["heading"], locked=(ps["step"] == 2))
-        else:
-            ps["arrow_pending"] = True
+    def _on_motion(e):
+        if st["step"] == 1:
+            _aim(e.x, e.y)
 
-    # Poll every 250 ms: keeps arrow on pin after pan/zoom and resolves pending draws
-    def _poll_arrow():
-        if not d.winfo_exists():
-            return
-        if ps["start"] is not None and ps["step"] in (1, 2):
-            sc = _start_canvas_xy()
-            if sc is not None:
-                if ps["step"] == 2:
-                    # Always redraw locked arrow so it tracks pan/zoom
-                    _draw_arrow(sc[0], sc[1], ps["heading"], locked=True)
-                elif ps["arrow_pending"]:
-                    # Pending: first draw in step 1 — show north arrow
-                    ps["arrow_pending"] = False
-                    _draw_arrow(sc[0], sc[1], ps["heading"], locked=False)
-                # step 1 non-pending: live mouse motion draws it via _ov_motion_passive
-            else:
-                ps["arrow_pending"] = True
-        d.after(250, _poll_arrow)
+    pm.canvas.bind("<ButtonPress-1>",   _on_press,   add="+")
+    pm.canvas.bind("<ButtonRelease-1>", _on_release, add="+")
+    pm.canvas.bind("<Motion>",          _on_motion,  add="+")
 
-    d.after(200, _poll_arrow)
-
-    # Focus search entry on open
     d.after(100, search_entry.focus_set)
     d.wait_window()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SPLASH
-# ─────────────────────────────────────────────────────────────────────────────
 def show_splash():
     sp = tk.Toplevel(root); sp.overrideredirect(True)
     sp.configure(bg=C["bg"])
