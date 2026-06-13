@@ -877,24 +877,78 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
         preview_text.see(tk.END)
         return
 
+    # strip <extensions> from every point, track and segment
+    for pt in all_pts:
+        pt.extensions = []
+    for trk in gpx.tracks:
+        trk.extensions = []
+        for seg in trk.segments:
+            seg.extensions = []
+    gpx.extensions = []
+
     # ── Phase 1: Elevation ────────────────────────────────────────────────────
     overwrite_ele = True
     if gpx_has_elevation(all_pts):
-        # Ask on the main thread via a thread-safe event
         _answer = [None]
         _evt    = threading.Event()
+        _dialog = [None]  # to hold Toplevel reference
+        
         def _ask_ele():
-            ans = messagebox.askyesnocancel(
-                "Elevation data found",
-                f"{basename}\nalready contains elevation data.\n\n"
-                f"Yes  →  overwrite with fresh SRTM data\n"
-                f"No   →  keep existing elevation\n"
-                f"Cancel  →  skip elevation entirely",
-                parent=root)
-            _answer[0] = ans   # True=overwrite, False=keep, None=skip
-            _evt.set()
+            dlg = tk.Toplevel(root)
+            dlg.title("Elevation data found")
+            dlg.geometry("400x220")
+            dlg.resizable(False, False)
+            dlg.transient(root)
+            dlg.grab_set()
+            _dialog[0] = dlg
+            
+            frm = tk.Frame(dlg, bg=C["bg"])
+            frm.pack(fill="both", expand=True)
+            
+            lbl = tk.Label(frm, 
+                text=f"{basename}\nalready contains elevation data.\n\n"
+                     f"Yes  →  overwrite with fresh SRTM data\n"
+                     f"No   →  keep existing elevation\n"
+                     f"Cancel  →  skip elevation entirely",
+                bg=C["bg"], fg=C["text"], font=("Consolas", 10), justify="left")
+            lbl.pack(pady=15, padx=10)
+            
+            btn_frm = tk.Frame(frm, bg=C["bg"])
+            btn_frm.pack(pady=10)
+            
+            def _on_yes():
+                _answer[0] = True
+                dlg.destroy()
+                _evt.set()
+            def _on_no():
+                _answer[0] = False
+                dlg.destroy()
+                _evt.set()
+            def _on_cancel():
+                _answer[0] = None
+                dlg.destroy()
+                _evt.set()
+            
+            btn_yes = tk.Button(btn_frm, text="Yes", width=8, command=_on_yes,
+                               bg=C["accent"], fg=C["bg"], font=("Consolas", 10, "bold"))
+            btn_yes.pack(side="left", padx=5)
+            btn_no = tk.Button(btn_frm, text="No", width=8, command=_on_no,
+                              bg=C["accent"], fg=C["bg"], font=("Consolas", 10, "bold"))
+            btn_no.pack(side="left", padx=5)
+            btn_cancel = tk.Button(btn_frm, text="Cancel", width=8, command=_on_cancel,
+                                  bg=C["accent"], fg=C["bg"], font=("Consolas", 10, "bold"))
+            btn_cancel.pack(side="left", padx=5)
+        
+        def _timeout_close():
+            if _dialog[0] and _dialog[0].winfo_exists():
+                _answer[0] = False   # default to No
+                _dialog[0].destroy()
+                _evt.set()
+        
         root.after(0, _ask_ele)
+        root.after(60000, _timeout_close)  # 60 seconds timeout
         _evt.wait()
+        
         if _answer[0] is None:        # Cancel → skip elevation phase
             overwrite_ele = None
         elif _answer[0] is False:     # No → keep existing

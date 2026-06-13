@@ -35,7 +35,7 @@ import tkintermapview
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION        = "v1.3"
+VERSION        = "v1.4"
 AUTHOR         = "Marco Cot"
 CONTACT        = "marcocot1982@gmail.com"
 SPLASH_SECONDS = 4
@@ -590,14 +590,13 @@ def process_video(video_path, start_lat, start_lon, initial_heading,
                     fx_buf.pop(0)
                 smooth_delta = float(np.mean(fx_buf))
 
-                # Mean-reversion decay: on straight sections the EIS residual
-                # slowly drifts the heading. A 2% pull toward initial_heading
-                # per step corrects this without fighting real turns.
-                # After 50 zero-input steps (~10s at 5fps) heading is 63% back.
-                DECAY = 0.98
-                heading = (heading * DECAY
-                           + initial_heading * (1.0 - DECAY)
-                           + smooth_delta) % 360.0
+                # Deadzone: ignore tiny deltas that are just EIS noise on
+                # straight sections. Only update heading when the signal
+                # is clearly above the noise floor (~0.15 deg/step).
+                # No decay toward initial_heading — that fought real turns.
+                DEADZONE = 0.15  # deg/step; tune down to catch gentler turns
+                if abs(smooth_delta) > DEADZONE:
+                    heading = (heading + smooth_delta) % 360.0
 
             if dist_step > 0:
                 lat, lon = move_point(lat, lon, heading, dist_step)
