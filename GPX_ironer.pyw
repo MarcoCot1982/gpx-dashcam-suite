@@ -138,6 +138,8 @@ class IronApp:
         self._drag_idx        = None       # index of point being dragged
         self._drag_marker     = None       # temporary marker shown during drag
         self._sel_marker      = None       # amber pin for selected point
+        # multi-file support: list of {"path": str, "count": int}
+        self._file_segments   = []
 
         # ── ttk style ─────────────────────────────────────────────────────────
         sty = ttk.Style(root); sty.theme_use("clam")
@@ -390,6 +392,7 @@ class IronApp:
             self.tree.column(c, width=widths.get(c,65), anchor="center")
         self.tree.tag_configure("rogue",    background=C["rogue"], foreground="#ff8a80")
         self.tree.tag_configure("selected_rogue", background=C["accent"], foreground="black")
+        self.tree.tag_configure("boundary", background="#0d2a4a", foreground="#64b5f6")
 
         tsb = ttk.Scrollbar(tree_inner, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=tsb.set)
@@ -631,11 +634,11 @@ class IronApp:
         self._do_autosave_check()
 
     def _do_autosave_check(self):
-        if self._dirty and self.points and self.source_path:
+        if self._dirty and self.points and self._file_segments:
             elapsed = time.time() - self._last_autosave
             if elapsed >= AUTOSAVE_SECS:
                 self._write_temp()
-        self.root.after(60_000, self._do_autosave_check)   # check every minute
+        self.root.after(60_000, self._do_autosave_check)
 
     def _write_temp(self):
         try:
@@ -655,64 +658,191 @@ class IronApp:
 
     # ── FILE OPS ───────────────────────────────────────────────────────────────
     def select_files(self):
-        path = filedialog.askopenfilename(filetypes=[("GPX","*.gpx")])
-        if not path: return
-        self._load_file(path)
+        paths = filedialog.askopenfilenames(filetypes=[("GPX","*.gpx")])
+        if not paths: return
+        if len(paths) == 1:
+            self._load_file(paths[0])
+        else:
+            self._load_multiple(list(paths))
 
     def _load_file(self, path):
-        """Load a GPX file directly by path (used by select_files and argv auto-load)."""
-        self.source_path      = path
-        self.current_filename = os.path.basename(path)
+        """Load a single GPX file by path."""
         try:
             with open(path, "r", encoding="utf-8") as f: gpx = gpxpy.parse(f)
         except Exception as e:
             messagebox.showerror("Load error", f"Failed to parse GPX:\n{e}"); return
-        self.points = [(p.latitude, p.longitude, p.time)
-                       for t in gpx.tracks for s in t.segments for p in s.points]
-
-        # make a backup of the original file (once; don't overwrite existing backup)
-        stem, ext = os.path.splitext(path)
-        if not stem.endswith("_backup"):
-            backup_path = stem + "_backup" + ext
-            if not os.path.exists(backup_path):
-                try:
-                    import shutil; shutil.copy2(path, backup_path)
-                    self._set_status(f"Backup saved → {os.path.basename(backup_path)}")
-                except Exception as ex:
-                    self._set_status(f"Backup failed: {ex}")
-
+        pts = [(p.latitude, p.longitude, p.time)
+               for t in gpx.tracks for s in t.segments for p in s.points]
+        self._make_backup(path)
+        self.points           = pts
+        self._file_segments   = [{"path": path, "count": len(pts)}]
+        self.source_path      = path
+        self.current_filename = os.path.basename(path)
         self.file_lbl.config(text=self.current_filename)
-        self._mark_clean()
-        self._last_autosave = time.time()
-        self.autosave_lbl.config(text="")
-        self._set_status(f"Loaded {len(self.points)} points  ·  {self.current_filename}")
+        self._mark_clean(); self._last_autosave = time.time(); self.autosave_lbl.config(text="")
+        self._set_status(f"Loaded {len(pts)} points  ·  {self.current_filename}")
         self._pending_center = ("fit",)
         self.refresh_map_and_tree()
 
-    def _save_to_path(self, path):
+    def _load_multiple(self, paths):
+        """Load and merge multiple GPX files."""
+        all_pts = []; segments = []; errors = []
+        for path in paths:
+            try:
+                with open(path, "r", encoding="utf-8") as f: gpx = gpxpy.parse(f)
+                pts = [(p.latitude, p.longitude, p.time)
+                       for t in gpx.tracks for s in t.segments for p in s.points]
+                self._make_backup(path)
+                segments.append({"path": path, "count": len(pts)})
+                all_pts.extend(pts)
+            except Exception as e:
+                errors.append(f"{os.path.basename(path)}: {e}")
+        if errors:
+            messagebox.showwarning("Load errors", "\n".join(errors))
+        if not all_pts: return
+        self.points           = all_pts
+        self._file_segments   = segments
+        self.source_path      = paths[0]
+        names = " + ".join(os.path.basename(p) for p in paths)
+        self.current_filename = names
+        self.file_lbl.config(text=names, wraplength=240)
+        self._mark_clean(); self._last_autosave = time.time(); self.autosave_lbl.config(text="")
+        self._set_status(f"Loaded {len(all_pts)} pts from {len(segments)} files")
+        self._pending_center = ("fit",)
+        self.refresh_map_and_tree()
+
+    def _make_backup(self, path):
+        """Create a _backup copy of a file if one doesn't already exist."""
+        import shutil
+        stem, ext = os.path.splitext(path)
+        if stem.endswith("_backup"): return
+        backup_path = stem + "_backup" + ext
+        if not os.path.exists(backup_path):
+            try:
+                shutil.copy2(path, backup_path)
+            except Exception:
+                pass
+
+    def _save_to_path(self, path, pts=None):
+        """Write pts (or self.points) to a GPX file."""
+        if pts is None: pts = self.points
         gpx = gpxpy.gpx.GPX()
         track = gpxpy.gpx.GPXTrack(); gpx.tracks.append(track)
         seg   = gpxpy.gpx.GPXTrackSegment(); track.segments.append(seg)
-        for p in self.points:
+        for p in pts:
             seg.points.append(gpxpy.gpx.GPXTrackPoint(p[0], p[1], time=p[2]))
-        with open(path,"w") as f: f.write(gpx.to_xml())
+        with open(path, "w", encoding="utf-8") as f: f.write(gpx.to_xml())
+
+    def _write_temp(self):
+        """Auto-save: write one _temp.gpx per original file, maintaining segment splits."""
+        try:
+            saved = []
+            offset = 0
+            for seg in self._file_segments:
+                pts  = self.points[offset:offset + seg["count"]]
+                stem = os.path.splitext(seg["path"])[0]
+                if stem.endswith("_temp"): stem = stem[:-5]
+                tmp  = stem + "_temp.gpx"
+                self._save_to_path(tmp, pts)
+                saved.append(os.path.basename(tmp))
+                offset += seg["count"]
+            self._last_autosave  = time.time()
+            self._last_temp_path = saved[0] if len(saved) == 1 else ""
+            ts = datetime.now().strftime("%H:%M:%S")
+            self.autosave_lbl.config(text=f"💾 auto-saved {ts}")
+            self._set_status("Auto-saved: " + ", ".join(saved))
+        except Exception:
+            self.autosave_lbl.config(text="⚠ auto-save failed")
 
     def export_clean_gpx(self):
         if not self.points: messagebox.showwarning("Empty","No points to save."); return
-        stem     = os.path.splitext(self.current_filename)[0] if self.current_filename else "track"
-        def_name = stem + "_ironed.gpx"
-        path     = filedialog.asksaveasfilename(defaultextension=".gpx", initialfile=def_name,
-                                                 filetypes=[("GPX","*.gpx")])
-        if not path: return
-        self._save_to_path(path)
-        # delete _temp file if it exists
+        multi = len(self._file_segments) > 1
+
+        if multi:
+            # Ask: merged or separate
+            d = tk.Toplevel(self.root)
+            d.title("Save options"); d.configure(bg=C["bg"]); d.resizable(False,False)
+            d.grab_set()
+            tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
+            tk.Label(d, text="SAVE FORMAT", font=("Consolas",10,"bold"),
+                     bg=C["bg"], fg=C["accent"]).pack(padx=20, pady=(14,4), anchor="w")
+            tk.Label(d, text=f"{len(self._file_segments)} files loaded — how to save?",
+                     font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w", pady=(0,10))
+            tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
+            mode_var = tk.IntVar(value=1)
+            _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
+                        activeforeground=C["accent"], selectcolor=C["accent2"],
+                        font=("Consolas",9), anchor="w", relief="flat")
+            rf = tk.Frame(d, bg=C["bg"]); rf.pack(fill="x", padx=20, pady=10)
+            tk.Radiobutton(rf, text="💾  Single merged file  (default)",
+                           variable=mode_var, value=1, **_rkw).pack(fill="x", pady=3)
+            tk.Radiobutton(rf, text="📂  Separate files  (original split)",
+                           variable=mode_var, value=2, **_rkw).pack(fill="x", pady=3)
+            chosen = [None]
+            def _ok():   chosen[0] = mode_var.get(); d.destroy()
+            def _cancel(): d.destroy()
+            tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
+            bf = tk.Frame(d, bg=C["bg"]); bf.pack(padx=20, pady=12)
+            self._mk_btn(bf, "Save", C["green"], _ok).pack(side="left", padx=(0,8))
+            self._mk_btn(bf, "Cancel", C["dim"], _cancel).pack(side="left")
+            tk.Frame(d, bg=C["accent"], height=2).pack(fill="x", side="bottom")
+            d.bind("<Return>", lambda e: _ok())
+            d.bind("<Escape>", lambda e: _cancel())
+            self.root.wait_window(d)
+            if chosen[0] is None: return
+            save_separate = (chosen[0] == 2)
+        else:
+            save_separate = False
+
+        if save_separate:
+            # Save each segment back to a user-chosen name per file
+            offset = 0
+            saved = []
+            for seg in self._file_segments:
+                pts  = self.points[offset:offset + seg["count"]]
+                stem = os.path.splitext(os.path.basename(seg["path"]))[0]
+                def_name = stem + "_ironed.gpx"
+                path = filedialog.asksaveasfilename(
+                    defaultextension=".gpx", initialfile=def_name,
+                    title=f"Save {os.path.basename(seg['path'])}",
+                    filetypes=[("GPX","*.gpx")])
+                if path:
+                    self._save_to_path(path, pts)
+                    saved.append(os.path.basename(path))
+                offset += seg["count"]
+            if saved:
+                self._clean_temps()
+                self._mark_clean()
+                self._set_status("Saved: " + ", ".join(saved))
+        else:
+            # Single merged file
+            stem = os.path.splitext(self.current_filename.split(" + ")[0])[0]
+            if len(self._file_segments) > 1:
+                stem = stem + "_merged"
+            def_name = stem + "_ironed.gpx"
+            path = filedialog.asksaveasfilename(
+                defaultextension=".gpx", initialfile=def_name,
+                filetypes=[("GPX","*.gpx")])
+            if not path: return
+            self._save_to_path(path)
+            self._clean_temps()
+            self._mark_clean()
+            self._set_status(f"Saved → {os.path.basename(path)}")
+
+    def _clean_temps(self):
+        """Delete all _temp.gpx files created by auto-save."""
+        for seg in self._file_segments:
+            stem = os.path.splitext(seg["path"])[0]
+            if stem.endswith("_temp"): stem = stem[:-5]
+            tmp = stem + "_temp.gpx"
+            if os.path.exists(tmp):
+                try: os.remove(tmp)
+                except: pass
         if self._last_temp_path and os.path.exists(self._last_temp_path):
             try: os.remove(self._last_temp_path)
             except: pass
-            self._last_temp_path = ""
-            self.autosave_lbl.config(text="")
-        self._mark_clean()
-        self._set_status(f"Saved → {os.path.basename(path)}")
+        self._last_temp_path = ""
+        self.autosave_lbl.config(text="")
 
     # ── IRONING ────────────────────────────────────────────────────────────────
     def auto_iron(self):
@@ -807,6 +937,22 @@ class IronApp:
         try: threshold = float(self.max_kph_iron.get())
         except: threshold = 5000.0
 
+        # build set of boundary start indices for O(1) lookup
+        boundary_starts = set()
+        if self._file_segments:
+            idx = 0
+            for seg in self._file_segments[1:]:   # first file's point 0 is not highlighted
+                idx += self._file_segments[self._file_segments.index(seg)-1]["count"]
+                boundary_starts.add(idx)
+
+        # rebuild boundary_starts properly (cumulative)
+        boundary_starts = set()
+        cum = 0
+        for seg in self._file_segments:
+            if cum > 0:
+                boundary_starts.add(cum)
+            cum += seg["count"]
+
         for i in visible:
             p = self.points[i]
             d_s = s_s = rogue = dir_str = ""
@@ -819,9 +965,15 @@ class IronApp:
                 rogue = s > threshold
                 dir_str = get_dir_indicator(self.points[i-1], p)
             ts = p[2].strftime("%H:%M:%S") if p[2] else ""
+            if i in boundary_starts:
+                tag = ("boundary",)
+            elif rogue:
+                tag = ("rogue",)
+            else:
+                tag = ()
             self.tree.insert("", "end",
                              values=(i, dir_str, f"{p[0]:.7f}", f"{p[1]:.7f}", d_s, s_s, ts),
-                             tags=("rogue",) if rogue else ())
+                             tags=tag)
 
         self.pt_count_lbl.config(text=f"{len(visible)} points shown  ·  {len(self.points)} total")
 
