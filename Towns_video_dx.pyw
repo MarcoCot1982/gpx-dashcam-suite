@@ -8,6 +8,7 @@ v1.1: live map showing full track + current-point marker
 """
 
 import os, sys, time, threading, queue, subprocess, tempfile, shutil
+from io import BytesIO
 from datetime import datetime
 
 import tkinter as tk
@@ -213,9 +214,18 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
         while not pause_event.is_set():
             if stop_event.is_set():
                 stopped[0] = True
-                f2,a2 = plt.subplots(figsize=(fig_w,fig_h), dpi=100)
-                f2.patch.set_facecolor("black"); a2.set_axis_off()
-                img = mplfig_to_npimage(f2); plt.close(f2); return img
+                f2, a2 = plt.subplots(figsize=(fig_w, fig_h))
+                if transparent:
+                    f2.patch.set_facecolor("none"); a2.set_facecolor("none")
+                    a2.set_axis_off(); f2.canvas.draw()
+                    buf = BytesIO()
+                    f2.savefig(buf, format="png", transparent=True, dpi=f2.dpi)
+                    buf.seek(0)
+                    img = np.array(Image.open(buf).convert("RGBA"))
+                else:
+                    f2.patch.set_facecolor("black"); a2.set_axis_off()
+                    img = mplfig_to_npimage(f2)
+                plt.close(f2); return img
             time.sleep(0.05)
         if stop_event.is_set(): stopped[0] = True
 
@@ -250,7 +260,7 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
         eta_s = time.strftime("%H:%M:%S", time.gmtime(eta))
         progress_cb(cf_total, total_frames_all, eta_s, ci, n_pts, cc, ct_str, use_flags)
 
-        fig,ax = plt.subplots(figsize=(fig_w,fig_h), dpi=100)
+        fig,ax = plt.subplots(figsize=(fig_w,fig_h))
         if transparent:
             fig.patch.set_facecolor("none"); ax.set_facecolor("none")
         else:
@@ -292,10 +302,12 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
 
         fig.canvas.draw()
         if transparent:
-            # RGBA extraction: preserves alpha for VP9 WebM output
-            w_px = int(fig.get_figwidth() * fig.dpi)
-            h_px = int(fig.get_figheight() * fig.dpi)
-            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h_px, w_px, 4).copy()
+            # buffer_rgba() with facecolor="none" still fills with white in Agg.
+            # savefig with transparent=True is the only reliable way to get real alpha.
+            buf = BytesIO()
+            fig.savefig(buf, format="png", transparent=True, dpi=fig.dpi)
+            buf.seek(0)
+            img = np.array(Image.open(buf).convert("RGBA"))
         else:
             img = mplfig_to_npimage(fig)
         plt.close(fig)
@@ -626,15 +638,15 @@ except Exception:
 
 sty=ttk.Style(root); sty.theme_use("clam")
 sty.configure(".",background=C["bg"],foreground=C["text"])
-sty.configure("TLabel",background=C["bg"],foreground=C["text"],font=("Consolas",9))
+sty.configure("TLabel",background=C["bg"],foreground=C["text"],font=("Segoe UI",9))
 sty.configure("TFrame",background=C["bg"])
 sty.configure("TProgressbar",troughcolor=C["border"],background=C["accent"],bordercolor=C["border"],lightcolor=C["accent"],darkcolor=C["accent2"])
-sty.configure("TRadiobutton",background=C["bg"],foreground=C["text"],font=("Consolas",9))
+sty.configure("TRadiobutton",background=C["bg"],foreground=C["text"],font=("Segoe UI",9))
 sty.configure("TCombobox",fieldbackground=C["panel2"],background=C["panel2"],foreground=C["text"],selectbackground=C["accent"],selectforeground="black")
 sty.map("TCombobox",fieldbackground=[("readonly",C["panel2"])],foreground=[("readonly",C["text"])])
 sty.configure("TSpinbox",fieldbackground=C["panel2"],background=C["panel2"],foreground=C["text"])
 
-def mk_btn(p,text,bg,cmd,width=None,font=("Consolas",9,"bold")):
+def mk_btn(p,text,bg,cmd,width=None,font=("Segoe UI",9,"bold")):
     kw=dict(text=text,bg=bg,fg="white" if bg!=C["dim"] else C["muted"],activebackground=bg,
             activeforeground="white",relief="flat",cursor="hand2",command=cmd,font=font,pady=5,padx=10)
     if width: kw["width"]=width
@@ -642,7 +654,7 @@ def mk_btn(p,text,bg,cmd,width=None,font=("Consolas",9,"bold")):
 
 def sec_hdr(parent,text,bg=None):
     bg=bg or C["panel"]; f=tk.Frame(parent,bg=bg); f.pack(fill="x",padx=12,pady=(14,4))
-    tk.Label(f,text=text,font=("Consolas",8,"bold"),bg=bg,fg=C["accent"]).pack(side="left")
+    tk.Label(f,text=text,font=("Segoe UI",8,"bold"),bg=bg,fg=C["accent"]).pack(side="left")
     tk.Frame(parent,bg=C["border"],height=1).pack(fill="x",padx=12)
 
 file_list=[]; file_status={}
@@ -668,11 +680,11 @@ def show_splash():
     sp.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
     tk.Frame(sp,bg=C["accent"],height=3).pack(fill="x")
     body=tk.Frame(sp,bg=C["bg"]); body.pack(expand=True,fill="both",padx=40)
-    tk.Label(body,text="GPX COMMENT VIDEO GENERATOR",font=("Consolas",18,"bold"),bg=C["bg"],fg=C["accent"]).pack(pady=(26,4))
-    tk.Label(body,text=f"{VERSION}  ·  by {AUTHOR}  ·  {datetime.now().year}",font=("Consolas",9),bg=C["bg"],fg=C["muted"]).pack()
-    tk.Label(body,text="reads geocoded GPX  →  renders comment-overlay video",font=("Consolas",9,"italic"),bg=C["bg"],fg=C["dim"]).pack(pady=(4,16))
+    tk.Label(body,text="GPX COMMENT VIDEO GENERATOR",font=("Segoe UI",18,"bold"),bg=C["bg"],fg=C["accent"]).pack(pady=(26,4))
+    tk.Label(body,text=f"{VERSION}  ·  by {AUTHOR}  ·  {datetime.now().year}",font=("Segoe UI",9),bg=C["bg"],fg=C["muted"]).pack()
+    tk.Label(body,text="reads geocoded GPX  →  renders comment-overlay video",font=("Segoe UI",9,"italic"),bg=C["bg"],fg=C["dim"]).pack(pady=(4,16))
     pbv=tk.DoubleVar(); pb=ttk.Progressbar(body,variable=pbv,maximum=100,length=580); pb.pack()
-    pct=tk.Label(body,text="Loading…",font=("Consolas",8),bg=C["bg"],fg=C["dim"]); pct.pack(pady=4)
+    pct=tk.Label(body,text="Loading…",font=("Segoe UI",8),bg=C["bg"],fg=C["dim"]); pct.pack(pady=4)
     tk.Frame(sp,bg=C["accent"],height=3).pack(fill="x",side="bottom")
     steps=max(20,SPLASH_SECONDS*25)
     interval_ms=max(1,int(SPLASH_SECONDS/steps*1000))
@@ -700,8 +712,8 @@ mb.add_cascade(label="Help",menu=hm); root.config(menu=mb)
 
 tk.Frame(root,bg=C["accent"],height=3).pack(fill="x")
 tb=tk.Frame(root,bg=C["bg"]); tb.pack(fill="x",padx=20,pady=6)
-tk.Label(tb,text="GPX COMMENT VIDEO GENERATOR",font=("Consolas",13,"bold"),bg=C["bg"],fg=C["accent"]).pack(side="left")
-tk.Label(tb,text=f"{VERSION}  ·  {AUTHOR}  ·  2025–{datetime.now().year}",font=("Consolas",8),bg=C["bg"],fg=C["dim"]).pack(side="right",pady=2)
+tk.Label(tb,text="GPX COMMENT VIDEO GENERATOR",font=("Segoe UI",13,"bold"),bg=C["bg"],fg=C["accent"]).pack(side="left")
+tk.Label(tb,text=f"{VERSION}  ·  {AUTHOR}  ·  2025–{datetime.now().year}",font=("Segoe UI",8),bg=C["bg"],fg=C["dim"]).pack(side="right",pady=2)
 tk.Frame(root,bg=C["border"],height=1).pack(fill="x")
 
 content=tk.Frame(root,bg=C["bg"]); content.pack(fill="both",expand=True)
@@ -717,22 +729,22 @@ mk_btn(br,"⬜ Clear",C["dim"],lambda:clear_queue()).pack(side="left",padx=3)
 lbf=tk.Frame(left,bg=C["border"],padx=1,pady=1); lbf.pack(fill="both",expand=True,padx=12,pady=(0,4))
 lbsb=tk.Scrollbar(lbf,bg=C["panel2"]); lbsb.pack(side="right",fill="y")
 file_listbox=tk.Listbox(lbf,bg=C["panel2"],fg=C["text"],selectbackground=C["accent"],selectforeground="black",
-                         font=("Consolas",9),borderwidth=0,highlightthickness=0,relief="flat",yscrollcommand=lbsb.set,activestyle="none")
+                         font=("Segoe UI",9),borderwidth=0,highlightthickness=0,relief="flat",yscrollcommand=lbsb.set,activestyle="none")
 file_listbox.pack(fill="both",expand=True); lbsb.config(command=file_listbox.yview)
-queue_count_lbl=tk.Label(left,text="0 files queued",font=("Consolas",8),bg=C["panel"],fg=C["muted"]); queue_count_lbl.pack(padx=12,anchor="w",pady=(0,4))
+queue_count_lbl=tk.Label(left,text="0 files queued",font=("Segoe UI",8),bg=C["panel"],fg=C["muted"]); queue_count_lbl.pack(padx=12,anchor="w",pady=(0,4))
 
 sec_hdr(left,"OUTPUT DESTINATION")
 df=tk.Frame(left,bg=C["panel"]); df.pack(fill="x",padx=12,pady=6)
 for val,txt in [(1,"Same folder as source"),(2,"Desktop / Videos"),(3,"Choose folder…")]:
     ttk.Radiobutton(df,text=txt,variable=dest_var,value=val).pack(anchor="w",pady=1)
-tk.Label(df,textvariable=custom_dest,font=("Consolas",8),bg=C["panel"],fg=C["muted"],wraplength=270,anchor="w").pack(fill="x",pady=2)
+tk.Label(df,textvariable=custom_dest,font=("Segoe UI",8),bg=C["panel"],fg=C["muted"],wraplength=270,anchor="w").pack(fill="x",pady=2)
 
 sec_hdr(left,"VIDEO SETTINGS")
 vs=tk.Frame(left,bg=C["panel"]); vs.pack(fill="x",padx=12,pady=6)
 
 def vr(lbl,wfn):
     r=tk.Frame(vs,bg=C["panel"]); r.pack(fill="x",pady=2)
-    tk.Label(r,text=lbl,font=("Consolas",8),bg=C["panel"],fg=C["muted"],width=15,anchor="w").pack(side="left")
+    tk.Label(r,text=lbl,font=("Segoe UI",8),bg=C["panel"],fg=C["muted"],width=15,anchor="w").pack(side="left")
     wfn(r)
 
 def swatch(p,var):
@@ -755,7 +767,7 @@ map_outer=tk.Frame(content,bg=C["bg"]); map_outer.pack(side="left",fill="both",e
 
 # header row with title + zoom buttons
 mh=tk.Frame(map_outer,bg=C["bg"]); mh.pack(fill="x",pady=(0,4))
-tk.Label(mh,text="LIVE TRACK MAP",font=("Consolas",8,"bold"),bg=C["bg"],fg=C["accent"]).pack(side="left")
+tk.Label(mh,text="LIVE TRACK MAP",font=("Segoe UI",8,"bold"),bg=C["bg"],fg=C["accent"]).pack(side="left")
 zf=tk.Frame(mh,bg=C["bg"]); zf.pack(side="right")
 
 def zoom_in():
@@ -763,8 +775,8 @@ def zoom_in():
 def zoom_out():
     current_zoom[0]=max(current_zoom[0]-1,2); map_widget.set_zoom(current_zoom[0])
 
-mk_btn(zf,"＋",C["panel2"],zoom_in,font=("Consolas",11,"bold")).pack(side="left",padx=2)
-mk_btn(zf,"－",C["panel2"],zoom_out,font=("Consolas",11,"bold")).pack(side="left",padx=2)
+mk_btn(zf,"＋",C["panel2"],zoom_in,font=("Segoe UI",11,"bold")).pack(side="left",padx=2)
+mk_btn(zf,"－",C["panel2"],zoom_out,font=("Segoe UI",11,"bold")).pack(side="left",padx=2)
 
 # amber-bordered map
 map_border=tk.Frame(map_outer,bg=C["accent"],padx=2,pady=2); map_border.pack(fill="both",expand=True)
@@ -784,7 +796,7 @@ flag_label.pack(side="left", padx=(0,8))
 pt_cmt_lbl = tk.Label(
     info_left,
     text="—",
-    font=("Consolas",13,"bold"),
+    font=("Segoe UI",13,"bold"),
     bg=C["panel"],
     fg=C["text"],
     anchor="w",
@@ -793,7 +805,7 @@ pt_cmt_lbl = tk.Label(
 )
 
 pt_cmt_lbl.pack(side="left",padx=14,fill="x",expand=True)
-pt_time_lbl=tk.Label(ib,text="",font=("Consolas",10),bg=C["panel"],fg=C["muted"])
+pt_time_lbl=tk.Label(ib,text="",font=("Segoe UI",10),bg=C["panel"],fg=C["muted"])
 pt_time_lbl.pack(side="right",padx=14)
 
 # ── RIGHT SIDEBAR ─────────────────────────────────────────────────────────────
@@ -801,29 +813,29 @@ right=tk.Frame(content,bg=C["panel"],width=270); right.pack(side="left",fill="y"
 
 sec_hdr(right,"CONTROLS")
 cr=tk.Frame(right,bg=C["panel"]); cr.pack(fill="x",padx=12,pady=8)
-mk_btn(cr,"▶  Start Render",C["green"],lambda:start_rendering(),font=("Consolas",9,"bold")).pack(fill="x",pady=3)
-_pb2=mk_btn(cr,"⏸  Pause",C["orange"],lambda:toggle_pause(),font=("Consolas",9,"bold")); _pb2.pack(fill="x",pady=3); pause_btn_ref[0]=_pb2
-mk_btn(cr,"⏹  Stop",C["red"],lambda:request_stop(),font=("Consolas",9,"bold")).pack(fill="x",pady=3)
+mk_btn(cr,"▶  Start Render",C["green"],lambda:start_rendering(),font=("Segoe UI",9,"bold")).pack(fill="x",pady=3)
+_pb2=mk_btn(cr,"⏸  Pause",C["orange"],lambda:toggle_pause(),font=("Segoe UI",9,"bold")); _pb2.pack(fill="x",pady=3); pause_btn_ref[0]=_pb2
+mk_btn(cr,"⏹  Stop",C["red"],lambda:request_stop(),font=("Segoe UI",9,"bold")).pack(fill="x",pady=3)
 
 # ── Start / End point entries ─────────────────────────────────────────────────
 def _mk_pt_entry(parent, label, var):
     """Dark-styled point entry (tk.Entry, not ttk, so colors are controllable)."""
     r=tk.Frame(parent,bg=C["panel"]); r.pack(fill="x",pady=(4,0))
-    tk.Label(r,text=label,font=("Consolas",8),bg=C["panel"],fg=C["muted"]).pack(side="left")
+    tk.Label(r,text=label,font=("Segoe UI",8),bg=C["panel"],fg=C["muted"]).pack(side="left")
     tk.Entry(r,textvariable=var,width=7,
              bg=C["panel2"],fg=C["text"],insertbackground=C["text"],
              relief="flat",highlightthickness=1,
              highlightcolor=C["accent"],highlightbackground=C["border"],
-             font=("Consolas",9)).pack(side="left",padx=6)
+             font=("Segoe UI",9)).pack(side="left",padx=6)
 
 _mk_pt_entry(cr,"Start from pt:", start_point_var)
 _mk_pt_entry(cr,"End on pt:    ", end_point_var)
 tk.Label(cr,text="blank = not set   |   end pt saves & stops",
-         font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
+         font=("Segoe UI",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
 
 # ── Resume partial / Merge ────────────────────────────────────────────────────
-mk_btn(cr,"⏩  Resume Partial…",C["blue"],lambda:resume_partial(),font=("Consolas",8,"bold")).pack(fill="x",pady=(6,2))
-mk_btn(cr,"🔗  Merge 2 Videos…",C["panel2"],lambda:merge_two_videos(),font=("Consolas",8,"bold")).pack(fill="x",pady=2)
+mk_btn(cr,"⏩  Resume Partial…",C["blue"],lambda:resume_partial(),font=("Segoe UI",8,"bold")).pack(fill="x",pady=(6,2))
+mk_btn(cr,"🔗  Merge 2 Videos…",C["panel2"],lambda:merge_two_videos(),font=("Segoe UI",8,"bold")).pack(fill="x",pady=2)
 
 # ── Flag toggle ───────────────────────────────────────────────────────────────
 flag_btn=[None]
@@ -834,10 +846,10 @@ def toggle_flags():
     else:
         flag_btn[0].config(text="ABC  Country Code", bg=C["panel2"], fg="white")
 # initial state matches default (True)
-fb=mk_btn(cr,"\U0001f3f3  Flags ON",C["orange"],toggle_flags,font=("Consolas",8,"bold"))
+fb=mk_btn(cr,"\U0001f3f3  Flags ON",C["orange"],toggle_flags,font=("Segoe UI",8,"bold"))
 fb.pack(fill="x",pady=(4,0)); flag_btn[0]=fb
 tk.Label(cr,text="flags shown as PNG (Windows-safe)",
-         font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
+         font=("Segoe UI",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
 
 # ── Transparent background toggle ────────────────────────────────────────────
 transp_btn=[None]
@@ -847,10 +859,10 @@ def toggle_transparent():
         transp_btn[0].config(text="□  Transparent ON", bg=C["orange"], fg="white")
     else:
         transp_btn[0].config(text="■  Opaque BG", bg=C["panel2"], fg="white")
-tb2=mk_btn(cr,"■  Opaque BG",C["panel2"],toggle_transparent,font=("Consolas",8,"bold"))
+tb2=mk_btn(cr,"■  Opaque BG",C["panel2"],toggle_transparent,font=("Segoe UI",8,"bold"))
 tb2.pack(fill="x",pady=(4,0)); transp_btn[0]=tb2
 tk.Label(cr,text="transparent → saves as .webm (VP9 alpha)",
-         font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
+         font=("Segoe UI",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
 
 # ── Both opaque + transparent toggle ─────────────────────────────────────────
 both_btn=[None]
@@ -860,40 +872,40 @@ def toggle_both():
         both_btn[0].config(text="⊕  Both ON", bg=C["orange"], fg="white")
     else:
         both_btn[0].config(text="⊕  Both: OFF", bg=C["panel2"], fg="white")
-tb3=mk_btn(cr,"⊕  Both: OFF",C["panel2"],toggle_both,font=("Consolas",8,"bold"))
+tb3=mk_btn(cr,"⊕  Both: OFF",C["panel2"],toggle_both,font=("Segoe UI",8,"bold"))
 tb3.pack(fill="x",pady=(4,0)); both_btn[0]=tb3
 tk.Label(cr,text="renders opaque + transparent, alternating\nevery 100 pts · ETA shown ×2",
-         font=("Consolas",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
+         font=("Segoe UI",7),bg=C["panel"],fg=C["dim"],justify="left").pack(anchor="w",pady=(2,0))
 
 sec_hdr(right,"PROGRESS")
 pf=tk.Frame(right,bg=C["panel"]); pf.pack(fill="x",padx=12,pady=6)
 
 def prog_row(p,lbl):
     r=tk.Frame(p,bg=C["panel"]); r.pack(fill="x",pady=2)
-    tk.Label(r,text=lbl,font=("Consolas",7),bg=C["panel"],fg=C["muted"],width=10,anchor="w").pack(side="left")
+    tk.Label(r,text=lbl,font=("Segoe UI",7),bg=C["panel"],fg=C["muted"],width=10,anchor="w").pack(side="left")
     pb=ttk.Progressbar(r,maximum=100,length=1,mode="determinate"); pb.pack(side="left",fill="x",expand=True)
-    pct=tk.Label(r,text=" 0%",font=("Consolas",7),bg=C["panel"],fg=C["accent"],width=4); pct.pack(side="left")
+    pct=tk.Label(r,text=" 0%",font=("Segoe UI",7),bg=C["panel"],fg=C["accent"],width=4); pct.pack(side="left")
     return pb,pct
 
 overall_pb,overall_pct=prog_row(pf,"Overall")
 current_pb,current_pct=prog_row(pf,"Current")
-file_info_lbl=tk.Label(pf,text="",font=("Consolas",8,"bold"),bg=C["panel"],fg=C["text"],wraplength=240,anchor="w"); file_info_lbl.pack(fill="x",pady=(6,0))
-eta_lbl=tk.Label(pf,text="",font=("Consolas",14,"bold"),bg=C["panel"],fg=C["accent"]); eta_lbl.pack(anchor="w",pady=(4,2))
-point_lbl=tk.Label(pf,text="",font=("Consolas",8),bg=C["panel"],fg=C["muted"]); point_lbl.pack(anchor="w")
+file_info_lbl=tk.Label(pf,text="",font=("Segoe UI",8,"bold"),bg=C["panel"],fg=C["text"],wraplength=240,anchor="w"); file_info_lbl.pack(fill="x",pady=(6,0))
+eta_lbl=tk.Label(pf,text="",font=("Segoe UI",14,"bold"),bg=C["panel"],fg=C["accent"]); eta_lbl.pack(anchor="w",pady=(4,2))
+point_lbl=tk.Label(pf,text="",font=("Segoe UI",8),bg=C["panel"],fg=C["muted"]); point_lbl.pack(anchor="w")
 
 sec_hdr(right,"RENDER LOG")
 lf2=tk.Frame(right,bg=C["border"],padx=1,pady=1); lf2.pack(fill="both",expand=True,padx=12,pady=(4,4))
 lgsb=tk.Scrollbar(lf2,bg=C["panel2"]); lgsb.pack(side="right",fill="y")
-log_text=tk.Text(lf2,bg=C["panel2"],fg=C["text"],font=("Consolas",8),relief="flat",borderwidth=0,
+log_text=tk.Text(lf2,bg=C["panel2"],fg=C["text"],font=("Segoe UI",8),relief="flat",borderwidth=0,
                   highlightthickness=0,yscrollcommand=lgsb.set,state="disabled",wrap="word")
 log_text.pack(fill="both",expand=True); lgsb.config(command=log_text.yview)
 log_text.tag_config("ok",foreground=C["green"]); log_text.tag_config("err",foreground=C["red"]); log_text.tag_config("info",foreground=C["accent"])
-mk_btn(right,"⬜ Clear log",C["dim"],lambda:log_text.delete("1.0",tk.END),font=("Consolas",8)).pack(padx=12,pady=(0,8),fill="x")
+mk_btn(right,"⬜ Clear log",C["dim"],lambda:log_text.delete("1.0",tk.END),font=("Segoe UI",8)).pack(padx=12,pady=(0,8),fill="x")
 
 # ── STATUS BAR ────────────────────────────────────────────────────────────────
 sb=tk.Frame(root,bg=C["panel"],height=26); sb.pack(fill="x",side="bottom")
 tk.Frame(sb,bg=C["accent"],height=2).pack(fill="x",side="bottom")
-status_lbl=tk.Label(sb,text="Ready.",font=("Consolas",8),bg=C["panel"],fg=C["muted"]); status_lbl.pack(side="left",padx=10,pady=3)
+status_lbl=tk.Label(sb,text="Ready.",font=("Segoe UI",8),bg=C["panel"],fg=C["muted"]); status_lbl.pack(side="left",padx=10,pady=3)
 
 STATUS_ICON={"pending":("⏳ ",C["muted"]),"rendering":("🎬 ",C["accent"]),"done":("✅ ",C["green"]),"error":("❌ ",C["red"]),"skipped":("⏭ ",C["dim"])}
 
@@ -1017,17 +1029,17 @@ def open_compositor_dialog(completed_files):
 
     tk.Frame(d, bg=C["accent"], height=3).pack(fill="x")
     tk.Label(d, text="RENDER COMPLETE",
-             font=("Consolas", 11, "bold"), bg=C["bg"], fg=C["accent"]).pack(
+             font=("Segoe UI", 11, "bold"), bg=C["bg"], fg=C["accent"]).pack(
              padx=16, pady=(14, 2), anchor="w")
     tk.Label(d, text="Select a file to open in Overlay Compositor:",
-             font=("Consolas", 8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
+             font=("Segoe UI", 8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
     tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=8)
 
     lf = tk.Frame(d, bg=C["accent"], padx=1, pady=1)
     lf.pack(fill="both", expand=True, padx=16, pady=(0, 8))
     li = tk.Frame(lf, bg=C["panel2"]); li.pack(fill="both", expand=True)
     lsb = ttk.Scrollbar(li, orient="vertical"); lsb.pack(side="right", fill="y")
-    lb = tk.Listbox(li, yscrollcommand=lsb.set, font=("Consolas", 9),
+    lb = tk.Listbox(li, yscrollcommand=lsb.set, font=("Segoe UI", 9),
                     bg=C["panel2"], fg=C["text"],
                     selectbackground=C["accent"], selectforeground="black",
                     activestyle="none", relief="flat", borderwidth=0, selectmode="single")
@@ -1041,7 +1053,7 @@ def open_compositor_dialog(completed_files):
         tk.Label(d,
                  text="⚠  overlay_compositor.pyw not found in the same folder.\n"
                       "   Locate it manually with the button below.",
-                 font=("Consolas", 7), bg=C["bg"], fg=C["orange"],
+                 font=("Segoe UI", 7), bg=C["bg"], fg=C["orange"],
                  justify="left").pack(padx=16, anchor="w", pady=(0, 4))
 
     def _launch():
@@ -1066,11 +1078,11 @@ def open_compositor_dialog(completed_files):
     bf = tk.Frame(d, bg=C["bg"]); bf.pack(fill="x", padx=16, pady=(0, 14))
     tk.Button(bf, text="🗺  Open in Overlay Compositor",
               bg=C["blue"], fg="white", activebackground=C["blue"], activeforeground="white",
-              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
+              relief="flat", cursor="hand2", font=("Segoe UI", 9, "bold"),
               pady=6, padx=10, command=_launch).pack(side="left", padx=(0, 6))
     tk.Button(bf, text="Close", bg=C["dim"], fg=C["muted"],
               activebackground=C["dim"], activeforeground="white",
-              relief="flat", cursor="hand2", font=("Consolas", 9, "bold"),
+              relief="flat", cursor="hand2", font=("Segoe UI", 9, "bold"),
               pady=6, padx=10, command=d.destroy).pack(side="left")
     tk.Frame(d, bg=C["accent"], height=3).pack(fill="x", side="bottom")
 

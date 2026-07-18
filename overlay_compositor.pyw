@@ -51,7 +51,7 @@ C = {
 # ──────────────────────────────────────────────────────────────────────────────
 # UI HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
-def mk_btn(parent, text, bg, cmd, state="normal", width=None, font=("Consolas", 9, "bold")):
+def mk_btn(parent, text, bg, cmd, state="normal", width=None, font=("Segoe UI", 9, "bold")):
     kw = dict(text=text, bg=bg,
               fg="white" if bg not in (C["dim"], C["panel2"]) else C["muted"],
               activebackground=bg, activeforeground="white",
@@ -63,21 +63,21 @@ def mk_btn(parent, text, bg, cmd, state="normal", width=None, font=("Consolas", 
 
 def sec_hdr(parent, text):
     f = tk.Frame(parent, bg=C["panel"]); f.pack(fill="x", padx=10, pady=(12, 3))
-    tk.Label(f, text=text, font=("Consolas", 8, "bold"),
+    tk.Label(f, text=text, font=("Segoe UI", 8, "bold"),
              bg=C["panel"], fg=C["accent"]).pack(side="left")
     tk.Frame(parent, bg=C["border"], height=1).pack(fill="x", padx=10)
 
 def mk_lbl(parent, text, fg=None, font=None):
     return tk.Label(parent, text=text,
                     bg=C["panel"], fg=fg or C["muted"],
-                    font=font or ("Consolas", 8))
+                    font=font or ("Segoe UI", 8))
 
 def mk_entry(parent, textvariable, width=14):
     return tk.Entry(parent, textvariable=textvariable, width=width,
                     bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
                     relief="flat", highlightthickness=1,
                     highlightcolor=C["accent"], highlightbackground=C["border"],
-                    font=("Consolas", 9))
+                    font=("Segoe UI", 9))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ICON  (GPS pin + film-strip holes — same as video_to_gpx)
@@ -299,7 +299,7 @@ class CompositorApp:
         # ttk style
         sty = ttk.Style(root); sty.theme_use("clam")
         sty.configure(".",          background=C["bg"],    foreground=C["text"])
-        sty.configure("TLabel",     background=C["bg"],    foreground=C["text"], font=("Consolas", 9))
+        sty.configure("TLabel",     background=C["bg"],    foreground=C["text"], font=("Segoe UI", 9))
         sty.configure("TFrame",     background=C["bg"])
         sty.configure("TScrollbar", background=C["panel2"], troughcolor=C["border"],
                                     arrowcolor=C["muted"])
@@ -316,9 +316,9 @@ class CompositorApp:
         tk.Frame(self.root, bg=C["accent"], height=3).pack(fill="x")
         tb = tk.Frame(self.root, bg=C["bg"]); tb.pack(fill="x", padx=16, pady=5)
         tk.Label(tb, text="GPX OVERLAY COMPOSITOR",
-                 font=("Consolas", 13, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("Segoe UI", 13, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         tk.Label(tb, text=f"{VERSION}  ·  {AUTHOR}  ·  2025–{datetime.now().year}",
-                 font=("Consolas", 8), bg=C["bg"], fg=C["dim"]).pack(side="right")
+                 font=("Segoe UI", 8), bg=C["bg"], fg=C["dim"]).pack(side="right")
         tk.Frame(self.root, bg=C["border"], height=1).pack(fill="x")
 
         body = tk.Frame(self.root, bg=C["bg"]); body.pack(fill="both", expand=True)
@@ -377,10 +377,10 @@ class CompositorApp:
         mk_lbl(cf, "Click & drag on the right panel →").pack(anchor="w", pady=(0, 4))
         cr2 = tk.Frame(cf, bg=C["panel"]); cr2.pack(fill="x", pady=(0, 2))
         self._autocrop_btn = mk_btn(cr2, "⚡ Auto-crop to text", C["orange"],
-               self._auto_crop, font=("Consolas", 8, "bold"))
+               self._auto_crop, font=("Segoe UI", 8, "bold"))
         self._autocrop_btn.pack(side="left", expand=True, fill="x", padx=(0, 2))
         mk_btn(cr2, "✕ Reset", C["dim"],
-               self.reset_crop, font=("Consolas", 8, "bold")).pack(side="left")
+               self.reset_crop, font=("Segoe UI", 8, "bold")).pack(side="left")
         self._crop_lbl = mk_lbl(cf, "Full frame — no crop active", fg=C["muted"])
         self._crop_lbl.pack(anchor="w", pady=(4, 0))
 
@@ -392,7 +392,7 @@ class CompositorApp:
             sf, from_=25, to=200, orient="horizontal",
             variable=self._scale_var, bg=C["panel"], fg=C["text"],
             activebackground=C["accent"], troughcolor=C["panel2"],
-            highlightthickness=0, bd=0, font=("Consolas", 8),
+            highlightthickness=0, bd=0, font=("Segoe UI", 8),
             command=lambda _: self._refresh_composite())
         self._scale_slider.pack(fill="x")
         self._scale_lbl = mk_lbl(sf, "100%", fg=C["accent"]); self._scale_lbl.pack(anchor="w")
@@ -410,7 +410,7 @@ class CompositorApp:
             b = tk.Button(grid_f, text=sym, width=3,
                           bg=C["accent"] if val == "bot-center" else C["panel2"],
                           fg="black" if val == "bot-center" else C["text"],
-                          relief="flat", font=("Consolas", 10, "bold"),
+                          relief="flat", font=("Segoe UI", 10, "bold"),
                           command=lambda v=val: self._set_pos(v))
             b.grid(row=r, column=c, padx=2, pady=2, sticky="nsew")
             self._pos_btns[val] = b
@@ -418,7 +418,7 @@ class CompositorApp:
         # drag-to-position toggle — drag the overlay on the composite preview
         drag_row = tk.Frame(pf, bg=C["panel"]); drag_row.pack(fill="x", pady=(6, 0))
         self._drag_pos_btn = mk_btn(drag_row, "✋  Drag to position: OFF", C["dim"],
-                                     self._toggle_drag_pos, font=("Consolas", 8, "bold"))
+                                     self._toggle_drag_pos, font=("Segoe UI", 8, "bold"))
         self._drag_pos_btn.pack(fill="x")
         mk_lbl(pf, "drag overlay on composite preview ↑").pack(anchor="w", pady=(2, 0))
 
@@ -455,7 +455,7 @@ class CompositorApp:
         self._range_mode_var = tk.IntVar(value=1)
         _rkw2 = dict(bg=C["panel"], fg=C["text"],
                      activebackground=C["panel"], activeforeground=C["accent"],
-                     selectcolor=C["accent2"], font=("Consolas", 8),
+                     selectcolor=C["accent2"], font=("Segoe UI", 8),
                      anchor="w", relief="flat")
         tk.Radiobutton(tf2, text="Full video  (label only in range)",
                        variable=self._range_mode_var, value=1, **_rkw2).pack(fill="x", pady=1)
@@ -468,7 +468,7 @@ class CompositorApp:
         self._dest_var = tk.IntVar(value=2)
         _rkw = dict(bg=C["panel"], fg=C["text"],
                     activebackground=C["panel"], activeforeground=C["accent"],
-                    selectcolor=C["accent2"], font=("Consolas", 8),
+                    selectcolor=C["accent2"], font=("Segoe UI", 8),
                     anchor="w", relief="flat")
         tk.Radiobutton(of, text="Same folder as base video",
                        variable=self._dest_var, value=1, **_rkw).pack(fill="x", pady=1)
@@ -498,7 +498,7 @@ class CompositorApp:
         left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         lh = tk.Frame(left_col, bg=C["bg"]); lh.pack(fill="x", pady=(0, 4))
         tk.Label(lh, text="COMPOSITE PREVIEW  —  enable drag to reposition overlay",
-                 font=("Consolas", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("Segoe UI", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         base_border = tk.Frame(left_col, bg=C["accent"], padx=2, pady=2)
         base_border.pack(fill="both", expand=True)
         self._comp_canvas = tk.Canvas(base_border, bg="black", highlightthickness=0)
@@ -513,7 +513,7 @@ class CompositorApp:
         right_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
         rh = tk.Frame(right_col, bg=C["bg"]); rh.pack(fill="x", pady=(0, 4))
         tk.Label(rh, text="OVERLAY PREVIEW  —  drag to select crop area",
-                 font=("Consolas", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("Segoe UI", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         ov_border = tk.Frame(right_col, bg=C["accent"], padx=2, pady=2)
         ov_border.pack(fill="both", expand=True)
         self._ov_canvas = tk.Canvas(ov_border, bg="#0a0a0a",
@@ -531,7 +531,7 @@ class CompositorApp:
         ct_inner = tk.Frame(ct_outer, bg=C["panel"]); ct_inner.pack(fill="x")
         ct_hdr   = tk.Frame(ct_inner, bg=C["panel"]); ct_hdr.pack(fill="x", padx=8, pady=(4, 0))
         tk.Label(ct_hdr, text="CURRENT OVERLAY TEXT  (what is being composited right now)",
-                 font=("Consolas", 7, "bold"), bg=C["panel"], fg=C["muted"]).pack(side="left")
+                 font=("Segoe UI", 7, "bold"), bg=C["panel"], fg=C["muted"]).pack(side="left")
         self._text_canvas = tk.Canvas(ct_inner, bg=C["panel2"],
                                        height=72, highlightthickness=0)
         self._text_canvas.pack(fill="x", padx=6, pady=4)
@@ -544,13 +544,13 @@ class CompositorApp:
         log_row.pack_propagate(False)
         lh2 = tk.Frame(log_row, bg=C["bg"]); lh2.pack(fill="x", pady=(0, 4))
         tk.Label(lh2, text="RENDER LOG",
-                 font=("Consolas", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("Segoe UI", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         log_border = tk.Frame(log_row, bg=C["accent"], padx=1, pady=1)
         log_border.pack(fill="both", expand=True)
         log_inner = tk.Frame(log_border, bg=C["panel2"]); log_inner.pack(fill="both", expand=True)
         self._log = scrolledtext.ScrolledText(
             log_inner, bg=C["panel2"], fg=C["text"],
-            insertbackground=C["text"], font=("Consolas", 8),
+            insertbackground=C["text"], font=("Segoe UI", 8),
             state="disabled", relief="flat", borderwidth=0)
         self._log.pack(fill="both", expand=True)
 
@@ -560,13 +560,13 @@ class CompositorApp:
         tk.Frame(sb, bg=C["accent"], height=2).pack(fill="x", side="bottom")
         self._status_lbl = tk.Label(
             sb, text="Select a base video and an overlay video to begin.",
-            font=("Consolas", 8), bg=C["panel"], fg=C["muted"])
+            font=("Segoe UI", 8), bg=C["panel"], fg=C["muted"])
         self._status_lbl.pack(side="left", padx=10, pady=3)
         self._progress_var = tk.DoubleVar()
         self._prog_bar = ttk.Progressbar(
             sb, variable=self._progress_var, maximum=100, length=320)
         self._prog_bar.pack(side="left", padx=8, pady=3)
-        self._eta_lbl = tk.Label(sb, text="", font=("Consolas", 8),
+        self._eta_lbl = tk.Label(sb, text="", font=("Segoe UI", 8),
                                   bg=C["panel"], fg=C["muted"])
         self._eta_lbl.pack(side="left", padx=4)
 
@@ -1218,14 +1218,14 @@ def show_splash(root):
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x")
     body = tk.Frame(sp, bg=C["bg"]); body.pack(expand=True, fill="both", padx=40)
     tk.Label(body, text="GPX OVERLAY COMPOSITOR",
-             font=("Consolas", 20, "bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(22, 4))
+             font=("Segoe UI", 20, "bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(22, 4))
     tk.Label(body, text=f"{VERSION}  ·  by {AUTHOR}  ·  {datetime.now().year}",
-             font=("Consolas", 9), bg=C["bg"], fg=C["muted"]).pack()
+             font=("Segoe UI", 9), bg=C["bg"], fg=C["muted"]).pack()
     tk.Label(body, text="overlay GPX text onto dashcam footage",
-             font=("Consolas", 9, "italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4, 14))
+             font=("Segoe UI", 9, "italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4, 14))
     pbv = tk.DoubleVar()
     pb  = ttk.Progressbar(body, variable=pbv, maximum=100, length=540); pb.pack()
-    pct = tk.Label(body, text="0%", font=("Consolas", 8), bg=C["bg"], fg=C["dim"]); pct.pack(pady=4)
+    pct = tk.Label(body, text="0%", font=("Segoe UI", 8), bg=C["bg"], fg=C["dim"]); pct.pack(pady=4)
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x", side="bottom")
     steps = max(15, SPLASH_SECONDS * 20)
     iv    = int(SPLASH_SECONDS * 1000 / steps)

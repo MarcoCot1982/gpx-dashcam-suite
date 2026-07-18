@@ -463,7 +463,7 @@ def format_cmt(road: str, town: str, province: str, country3: str, choice: int) 
 # ──────────────────────────────────────────────────────────────────────────────
 # UI helpers  (matching GPX Ironer)
 # ──────────────────────────────────────────────────────────────────────────────
-def mk_btn(parent, text, bg, cmd, width=None, font=("Consolas",9,"bold")):
+def mk_btn(parent, text, bg, cmd, width=None, font=("segoe UI",9,"bold")):
     kw = dict(text=text, bg=bg,
               fg="white" if bg not in (C["dim"], C["panel2"]) else C["muted"],
               activebackground=bg, activeforeground="white",
@@ -474,7 +474,7 @@ def mk_btn(parent, text, bg, cmd, width=None, font=("Consolas",9,"bold")):
 
 def sec_hdr(parent, text):
     f = tk.Frame(parent, bg=C["panel"]); f.pack(fill="x", padx=10, pady=(12,3))
-    tk.Label(f, text=text, font=("Consolas",8,"bold"),
+    tk.Label(f, text=text, font=("segoe UI",8,"bold"),
              bg=C["panel"], fg=C["accent"]).pack(side="left")
     tk.Frame(parent, bg=C["border"], height=1).pack(fill="x", padx=10)
 
@@ -495,10 +495,10 @@ root.resizable(True, True)
 # ── ttk style ────────────────────────────────────────────────────────────────
 sty = ttk.Style(root); sty.theme_use("clam")
 sty.configure(".",                  background=C["bg"],    foreground=C["text"])
-sty.configure("TLabel",             background=C["bg"],    foreground=C["text"], font=("Consolas",9))
+sty.configure("TLabel",             background=C["bg"],    foreground=C["text"], font=("segoe UI",9))
 sty.configure("TFrame",             background=C["bg"])
 sty.configure("TEntry",             fieldbackground=C["panel2"], foreground=C["text"],
-                                    insertcolor=C["text"], font=("Consolas",9))
+                                    insertcolor=C["text"], font=("segoe UI",9))
 sty.configure("TScrollbar",         background=C["panel2"], troughcolor=C["border"],
                                     arrowcolor=C["muted"])
 sty.configure("Horizontal.TProgressbar", background=C["accent"], troughcolor=C["panel2"],
@@ -515,14 +515,14 @@ def show_splash_then_main():
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x")
     body = tk.Frame(sp, bg=C["bg"]); body.pack(expand=True, fill="both", padx=40)
     tk.Label(body, text="GPX REVERSE GEOCODER",
-             font=("Consolas",22,"bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(28,4))
+             font=("segoe UI",22,"bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(28,4))
     tk.Label(body, text=f"{VERSION}  ·  by {AUTHOR}  ·  {datetime.now().year}",
-             font=("Consolas",9), bg=C["bg"], fg=C["muted"]).pack()
+             font=("segoe UI",9), bg=C["bg"], fg=C["muted"]).pack()
     tk.Label(body, text="Name your roads - Gotta cache 'em all!",
-             font=("Consolas",9,"italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4,16))
+             font=("segoe UI",9,"italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4,16))
     pbv = tk.DoubleVar()
     pb  = ttk.Progressbar(body, variable=pbv, maximum=100, length=540); pb.pack()
-    pct = tk.Label(body, text="0%", font=("Consolas",8), bg=C["bg"], fg=C["dim"])
+    pct = tk.Label(body, text="0%", font=("segoe UI",8), bg=C["bg"], fg=C["dim"])
     pct.pack(pady=4)
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x", side="bottom")
 
@@ -554,9 +554,9 @@ show_splash_then_main()
 tk.Frame(root, bg=C["accent"], height=3).pack(fill="x")
 tb = tk.Frame(root, bg=C["bg"]); tb.pack(fill="x", padx=16, pady=5)
 tk.Label(tb, text="GPX GEOCODER",
-         font=("Consolas",13,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+         font=("segoe UI",13,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
 tk.Label(tb, text=f"{VERSION}  ·  {AUTHOR}  ·  2025–{datetime.now().year}",
-         font=("Consolas",8), bg=C["bg"], fg=C["dim"]).pack(side="right")
+         font=("segoe UI",8), bg=C["bg"], fg=C["dim"]).pack(side="right")
 tk.Frame(root, bg=C["border"], height=1).pack(fill="x")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -635,7 +635,7 @@ left.pack_propagate(False)
 # Radio button shared style
 _radio_kw = dict(bg=C["panel"], fg=C["text"],
                  activebackground=C["panel"], activeforeground=C["accent"],
-                 selectcolor=C["accent2"], font=("Consolas",8),
+                 selectcolor=C["accent2"], font=("segoe UI",8),
                  anchor="w", relief="flat")
 
 # FILE
@@ -675,27 +675,27 @@ pause_btn_ref[0] = _pause_btn
 mk_btn(pr, "⏹  Stop & Save",     C["red"],  lambda: stop_and_save()).pack(fill="x", pady=2)
 mk_btn(pr, "⏭  Start from Point…", C["blue"], lambda: open_start_from_point_dialog()).pack(fill="x", pady=2)
 tk.Label(pr, text="Pause · Stop & save partial\nStart from a specific timestamp",
-         font=("Consolas",7), bg=C["panel"], fg=C["dim"],
+         font=("segoe UI",7), bg=C["panel"], fg=C["dim"],
          justify="left").pack(anchor="w", padx=2, pady=(4,0))
 
 # AUTO-SAVE
 sec_hdr(left, "AUTO-SAVE")
 asf = tk.Frame(left, bg=C["panel"]); asf.pack(fill="x", padx=10, pady=6)
 asr = tk.Frame(asf, bg=C["panel"]); asr.pack(fill="x")
-tk.Label(asr, text="Every", font=("Consolas",8), bg=C["panel"], fg=C["muted"]).pack(side="left")
+tk.Label(asr, text="Every", font=("segoe UI",8), bg=C["panel"], fg=C["muted"]).pack(side="left")
 autosave_var    = tk.IntVar(value=1000)
 _autosave_entry = tk.Spinbox(asr, from_=10, to=100000, increment=100,
                               textvariable=autosave_var, width=7,
                               bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
-                              buttonbackground=C["panel"], font=("Consolas",9),
+                              buttonbackground=C["panel"], font=("segoe UI",9),
                               relief="flat", highlightthickness=0)
 _autosave_entry.pack(side="left", padx=6)
-tk.Label(asr, text="pts", font=("Consolas",8), bg=C["panel"], fg=C["muted"]).pack(side="left")
+tk.Label(asr, text="pts", font=("segoe UI",8), bg=C["panel"], fg=C["muted"]).pack(side="left")
 
 # CACHE
 sec_hdr(left, "CACHE")
 cf = tk.Frame(left, bg=C["panel"]); cf.pack(fill="x", padx=10, pady=6)
-cache_count_label = tk.Label(cf, text="—", font=("Consolas",8), bg=C["panel"], fg=C["muted"])
+cache_count_label = tk.Label(cf, text="—", font=("segoe UI",8), bg=C["panel"], fg=C["muted"])
 cache_count_label.pack(anchor="w")
 
 def refresh_cache_count_label():
@@ -711,7 +711,7 @@ nf = tk.Frame(left, bg=C["accent"], padx=1, pady=1)
 nf.pack(fill="both", expand=True, padx=10, pady=(4,10))
 ni = tk.Frame(nf, bg=C["panel2"]); ni.pack(fill="both", expand=True)
 notepad = tk.Text(ni, bg=C["panel2"], fg=C["text"],
-                   insertbackground=C["text"], font=("Consolas",8),
+                   insertbackground=C["text"], font=("segoe UI",8),
                    relief="flat", borderwidth=0, wrap="word",
                    undo=True)
 notepad.pack(fill="both", expand=True, padx=4, pady=4)
@@ -723,7 +723,7 @@ right.pack(side="left", fill="both", expand=True, padx=10, pady=10)
 # top bar: section label + zoom + autocenter
 rh = tk.Frame(right, bg=C["bg"]); rh.pack(fill="x", pady=(0,6))
 tk.Label(rh, text="PREVIEW  &  MAP",
-         font=("Consolas",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+         font=("segoe UI",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
 
 zf = tk.Frame(rh, bg=C["bg"]); zf.pack(side="right")
 autocenter_var = tk.BooleanVar(value=False)
@@ -736,7 +736,7 @@ def toggle_autocenter():
 
 autocenter_btn = mk_btn(zf, "⊙  Auto-center: OFF", C["dim"],
                         lambda: (autocenter_var.set(not autocenter_var.get()), toggle_autocenter()),
-                        font=("Consolas",8))
+                        font=("segoe UI",8))
 autocenter_btn.pack(side="right", padx=(6,0))
 
 def zoom_in():
@@ -744,8 +744,8 @@ def zoom_in():
 def zoom_out():
     z = max(map_widget.zoom-1, 3); map_widget.set_zoom(z); current_zoom[0] = z
 
-mk_btn(zf, "＋", C["panel2"], zoom_in,  font=("Consolas",11,"bold")).pack(side="right", padx=2)
-mk_btn(zf, "－", C["panel2"], zoom_out, font=("Consolas",11,"bold")).pack(side="right", padx=2)
+mk_btn(zf, "＋", C["panel2"], zoom_in,  font=("segoe UI",11,"bold")).pack(side="right", padx=2)
+mk_btn(zf, "－", C["panel2"], zoom_out, font=("segoe UI",11,"bold")).pack(side="right", padx=2)
 
 # content row: preview text (left) + map (right)
 content = tk.Frame(right, bg=C["bg"]); content.pack(fill="both", expand=True)
@@ -757,7 +757,7 @@ text_outer.pack_propagate(False)
 
 th = tk.Frame(text_outer, bg=C["bg"]); th.pack(fill="x", pady=(0,4))
 tk.Label(th, text="OUTPUT PREVIEW",
-         font=("Consolas",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+         font=("segoe UI",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
 
 text_border = tk.Frame(text_outer, bg=C["accent"], padx=1, pady=1)
 text_border.pack(fill="both", expand=True)
@@ -767,7 +767,7 @@ text_inner.pack(fill="both", expand=True)
 tsb = ttk.Scrollbar(text_inner, orient="vertical")
 tsb.pack(side="right", fill="y")
 preview_text = tk.Text(text_inner, width=52, bg=C["panel2"], fg=C["text"],
-                        insertbackground=C["text"], font=("Consolas",9),
+                        insertbackground=C["text"], font=("segoe UI",9),
                         relief="flat", borderwidth=0, wrap="word",
                         yscrollcommand=tsb.set)
 preview_text.pack(side="left", fill="both", expand=True)
@@ -779,7 +779,7 @@ map_outer.pack(side="left", fill="both", expand=True)
 
 mh2 = tk.Frame(map_outer, bg=C["bg"]); mh2.pack(fill="x", pady=(0,4))
 tk.Label(mh2, text="TRACK MAP",
-         font=("Consolas",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+         font=("segoe UI",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
 
 map_border = tk.Frame(map_outer, bg=C["accent"], padx=2, pady=2)
 map_border.pack(fill="both", expand=True)
@@ -794,21 +794,21 @@ sb = tk.Frame(root, bg=C["panel"], height=26)
 sb.pack(fill="x", side="bottom")
 tk.Frame(sb, bg=C["accent"], height=2).pack(fill="x", side="bottom")
 status_label = tk.Label(sb, text="Ready. Select GPX file(s) to begin.",
-                         font=("Consolas",8), bg=C["panel"], fg=C["muted"])
+                         font=("segoe UI",8), bg=C["panel"], fg=C["muted"])
 status_label.pack(side="left", padx=10, pady=3)
 progress_var = tk.DoubleVar()
 progress_bar = ttk.Progressbar(sb, variable=progress_var, maximum=100, length=280)
 progress_bar.pack(side="left", padx=8, pady=3)
-eta_label = tk.Label(sb, text="", font=("Consolas",8), bg=C["panel"], fg=C["muted"])
+eta_label = tk.Label(sb, text="", font=("segoe UI",8), bg=C["panel"], fg=C["muted"])
 eta_label.pack(side="left", padx=6)
 # point counter  e.g. "1777 / 2125 pts"
 point_counter_label = tk.Label(sb, text="—  /  —  pts",
-                                font=("Consolas",8,"bold"), bg=C["panel"], fg=C["accent"])
+                                font=("segoe UI",8,"bold"), bg=C["panel"], fg=C["accent"])
 point_counter_label.pack(side="left", padx=(4,0))
-tk.Label(sb, text="·", font=("Consolas",8), bg=C["panel"], fg=C["dim"]).pack(side="left", padx=4)
+tk.Label(sb, text="·", font=("segoe UI",8), bg=C["panel"], fg=C["dim"]).pack(side="left", padx=4)
 # file counter  e.g. "file 1 / 3"
 file_counter_label = tk.Label(sb, text="file  —  /  —",
-                               font=("Consolas",8), bg=C["panel"], fg=C["muted"])
+                               font=("segoe UI",8), bg=C["panel"], fg=C["muted"])
 file_counter_label.pack(side="left")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -910,7 +910,7 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
                      f"Yes  →  overwrite with fresh SRTM data\n"
                      f"No   →  keep existing elevation\n"
                      f"Cancel  →  skip elevation entirely",
-                bg=C["bg"], fg=C["text"], font=("Consolas", 10), justify="left")
+                bg=C["bg"], fg=C["text"], font=("segoe UI", 10), justify="left")
             lbl.pack(pady=15, padx=10)
             
             btn_frm = tk.Frame(frm, bg=C["bg"])
@@ -930,13 +930,13 @@ def process_single_file(conn, file_path, cmt_choice_value, dest_choice_value,
                 _evt.set()
             
             btn_yes = tk.Button(btn_frm, text="Yes", width=8, command=_on_yes,
-                               bg=C["accent"], fg=C["bg"], font=("Consolas", 10, "bold"))
+                               bg=C["accent"], fg=C["bg"], font=("segoe UI", 10, "bold"))
             btn_yes.pack(side="left", padx=5)
             btn_no = tk.Button(btn_frm, text="No", width=8, command=_on_no,
-                              bg=C["accent"], fg=C["bg"], font=("Consolas", 10, "bold"))
+                              bg=C["accent"], fg=C["bg"], font=("segoe UI", 10, "bold"))
             btn_no.pack(side="left", padx=5)
             btn_cancel = tk.Button(btn_frm, text="Cancel", width=8, command=_on_cancel,
-                                  bg=C["accent"], fg=C["bg"], font=("Consolas", 10, "bold"))
+                                  bg=C["accent"], fg=C["bg"], font=("segoe UI", 10, "bold"))
             btn_cancel.pack(side="left", padx=5)
         
         def _timeout_close():
@@ -1162,11 +1162,11 @@ def show_completion_dialog(completed_paths):
 
     tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
     tk.Label(d, text="PROCESSING COMPLETE",
-             font=("Consolas",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(12,2), anchor="w")
+             font=("segoe UI",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(12,2), anchor="w")
     tk.Label(d, text=f"{len(completed_paths)} file(s) geocoded successfully.",
-             font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
+             font=("segoe UI",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
     tk.Label(d, text="Select file(s) and choose what to do next:",
-             font=("Consolas",8), bg=C["bg"], fg=C["dim"]).pack(padx=16, pady=(2,8), anchor="w")
+             font=("segoe UI",8), bg=C["bg"], fg=C["dim"]).pack(padx=16, pady=(2,8), anchor="w")
     tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16)
 
     # listbox — multi-select so user can send several files to Towns Video at once
@@ -1174,7 +1174,7 @@ def show_completion_dialog(completed_paths):
     lf.pack(fill="both", expand=True, padx=16, pady=8)
     li = tk.Frame(lf, bg=C["panel2"]); li.pack(fill="both", expand=True)
     lsb = ttk.Scrollbar(li, orient="vertical"); lsb.pack(side="right", fill="y")
-    listbox = tk.Listbox(li, yscrollcommand=lsb.set, font=("Consolas",8),
+    listbox = tk.Listbox(li, yscrollcommand=lsb.set, font=("segoe UI",8),
                           bg=C["panel2"], fg=C["text"],
                           selectbackground=C["accent"], selectforeground="black",
                           activestyle="none", relief="flat", borderwidth=0,
@@ -1189,7 +1189,7 @@ def show_completion_dialog(completed_paths):
 
     # hint for multi-select
     tk.Label(d, text="Shift-click or Ctrl-click to select multiple files (for Towns Video)",
-             font=("Consolas",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,4))
+             font=("segoe UI",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,4))
 
     def _get_selection(single=False):
         """Return list of selected paths, or show warning if nothing selected."""
@@ -1342,16 +1342,16 @@ def open_start_from_point_dialog():
 
     tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
     tk.Label(d, text="START FROM POINT",
-             font=("Consolas",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(12,2), anchor="w")
+             font=("segoe UI",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(12,2), anchor="w")
     tk.Label(d, text=os.path.basename(file_path),
-             font=("Consolas",8,"italic"), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
+             font=("segoe UI",8,"italic"), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
     tk.Label(d, text=f"{len(points_tmp)} trackpoints · select starting point:",
-             font=("Consolas",8), bg=C["bg"], fg=C["dim"]).pack(padx=16, pady=(2,8), anchor="w")
+             font=("segoe UI",8), bg=C["bg"], fg=C["dim"]).pack(padx=16, pady=(2,8), anchor="w")
     tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16)
 
     # filter
     sf = tk.Frame(d, bg=C["bg"]); sf.pack(fill="x", padx=16, pady=8)
-    tk.Label(sf, text="Filter:", font=("Consolas",8), bg=C["bg"],
+    tk.Label(sf, text="Filter:", font=("segoe UI",8), bg=C["bg"],
              fg=C["muted"]).pack(side="left", padx=(0,6))
     search_var = tk.StringVar()
     se = ttk.Entry(sf, textvariable=search_var, width=36)
@@ -1364,7 +1364,7 @@ def open_start_from_point_dialog():
     li.pack(fill="both", expand=True)
     lsb = ttk.Scrollbar(li, orient="vertical")
     lsb.pack(side="right", fill="y")
-    listbox = tk.Listbox(li, yscrollcommand=lsb.set, font=("Consolas",8),
+    listbox = tk.Listbox(li, yscrollcommand=lsb.set, font=("segoe UI",8),
                           bg=C["panel2"], fg=C["text"],
                           selectbackground=C["accent"], selectforeground="black",
                           activestyle="none", relief="flat", borderwidth=0,

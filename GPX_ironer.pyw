@@ -144,21 +144,21 @@ class IronApp:
         # ── ttk style ─────────────────────────────────────────────────────────
         sty = ttk.Style(root); sty.theme_use("clam")
         sty.configure(".",              background=C["bg"],    foreground=C["text"])
-        sty.configure("TLabel",         background=C["bg"],    foreground=C["text"],  font=("Consolas",9))
+        sty.configure("TLabel",         background=C["bg"],    foreground=C["text"],  font=("Segoe UI",9))
         sty.configure("TFrame",         background=C["bg"])
         sty.configure("TLabelframe",    background=C["panel"], foreground=C["accent"],
-                                        font=("Consolas",8,"bold"), relief="flat", borderwidth=1)
+                                        font=("Segoe UI",8,"bold"), relief="flat", borderwidth=1)
         sty.configure("TLabelframe.Label", background=C["panel"], foreground=C["accent"],
-                                           font=("Consolas",8,"bold"))
+                                           font=("Segoe UI",8,"bold"))
         sty.configure("TEntry",         fieldbackground=C["panel2"], foreground=C["text"],
-                                        insertcolor=C["text"],  font=("Consolas",9))
+                                        insertcolor=C["text"],  font=("Segoe UI",9))
         sty.configure("TScrollbar",     background=C["panel2"], troughcolor=C["border"],
                                         arrowcolor=C["muted"])
         sty.configure("Treeview",       background=C["panel2"], foreground=C["text"],
-                                        fieldbackground=C["panel2"], font=("Consolas",8),
+                                        fieldbackground=C["panel2"], font=("Segoe UI",8),
                                         rowheight=20, borderwidth=0)
         sty.configure("Treeview.Heading", background=C["panel"], foreground=C["accent"],
-                                           font=("Consolas",8,"bold"), relief="flat")
+                                           font=("Segoe UI",8,"bold"), relief="flat")
         sty.map("Treeview",
                 background=[("selected", C["accent"])],
                 foreground=[("selected", "black")])
@@ -175,7 +175,7 @@ class IronApp:
         self._schedule_autosave()
 
     # ── UI helpers ─────────────────────────────────────────────────────────────
-    def _mk_btn(self, parent, text, bg, cmd, width=None, font=("Consolas",9,"bold")):
+    def _mk_btn(self, parent, text, bg, cmd, width=None, font=("Segoe UI",9,"bold")):
         kw = dict(text=text, bg=bg,
                   fg="white" if bg not in (C["dim"], C["panel2"]) else C["muted"],
                   activebackground=bg, activeforeground="white",
@@ -186,14 +186,14 @@ class IronApp:
 
     def _sec_hdr(self, parent, text):
         f = tk.Frame(parent, bg=C["panel"]); f.pack(fill="x", padx=10, pady=(12,3))
-        tk.Label(f, text=text, font=("Consolas",8,"bold"),
+        tk.Label(f, text=text, font=("Segoe UI",8,"bold"),
                  bg=C["panel"], fg=C["accent"]).pack(side="left")
         tk.Frame(parent, bg=C["border"], height=1).pack(fill="x", padx=10)
 
     def _lbl_entry(self, parent, text, var_or_entry, width=6):
         """Returns an Entry widget packed inline."""
         r = tk.Frame(parent, bg=C["panel"]); r.pack(side="left")
-        tk.Label(r, text=text, font=("Consolas",8), bg=C["panel"],
+        tk.Label(r, text=text, font=("Segoe UI",8), bg=C["panel"],
                  fg=C["muted"]).pack(side="left", padx=(6,1))
         if isinstance(var_or_entry, tk.StringVar):
             e = ttk.Entry(r, textvariable=var_or_entry, width=width); e.pack(side="left")
@@ -207,9 +207,9 @@ class IronApp:
         tk.Frame(self.root, bg=C["accent"], height=3).pack(fill="x")
         tb = tk.Frame(self.root, bg=C["bg"]); tb.pack(fill="x", padx=16, pady=5)
         tk.Label(tb, text="GPX IRONER",
-                 font=("Consolas",13,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("Segoe UI",13,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         tk.Label(tb, text=f"{VERSION}  ·  {AUTHOR}  ·  2025–{datetime.now().year}",
-                 font=("Consolas",8), bg=C["bg"], fg=C["dim"]).pack(side="right")
+                 font=("Segoe UI",8), bg=C["bg"], fg=C["dim"]).pack(side="right")
         tk.Frame(self.root, bg=C["border"], height=1).pack(fill="x")
 
         # body
@@ -257,13 +257,13 @@ class IronApp:
         self._mk_btn(fr, "🔄  Refresh View",C["dim"],   self.refresh_map_and_tree).pack(fill="x", pady=2)
 
         self.file_lbl = tk.Label(left, text="No file loaded",
-                                  font=("Consolas",8,"italic"), bg=C["panel"],
+                                  font=("Segoe UI",8,"italic"), bg=C["panel"],
                                   fg=C["muted"], wraplength=240, anchor="w")
         self.file_lbl.pack(padx=10, anchor="w", pady=(0,4))
 
         # auto-save status
         self.autosave_lbl = tk.Label(left, text="",
-                                      font=("Consolas",7), bg=C["panel"], fg=C["dim"])
+                                      font=("Segoe UI",7), bg=C["panel"], fg=C["dim"])
         self.autosave_lbl.pack(padx=10, anchor="w")
 
         self._sec_hdr(left, "SELF-CORRECT")
@@ -281,7 +281,7 @@ class IronApp:
         self._lbl_entry(r3, "Pin Freq", self.marker_freq_var,    width=5)
         # Show all points toggle (OFF by default — can be slow on large tracks)
         self._dots_btn = self._mk_btn(vs, "⬤  Show All Points: OFF", C["dim"],
-                                      self._toggle_show_dots, font=("Consolas",8,"bold"))
+                                      self._toggle_show_dots, font=("Segoe UI",8,"bold"))
         self._dots_btn.pack(fill="x", pady=(6,0))
 
         self._sec_hdr(left, "FOCUS")
@@ -300,11 +300,11 @@ class IronApp:
         # Grid layout: all rows share the same 4 columns → perfectly aligned
         fl.grid_columnconfigure(1, weight=1)
         fl.grid_columnconfigure(3, weight=1)
-        _lkw = dict(font=("Consolas",8), bg=C["panel"], fg=C["muted"])
+        _lkw = dict(font=("Segoe UI",8), bg=C["panel"], fg=C["muted"])
         _ekw = dict(bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
                     relief="flat", highlightthickness=1,
                     highlightcolor=C["accent"], highlightbackground=C["border"],
-                    font=("Consolas",9))
+                    font=("Segoe UI",9))
 
         tk.Label(fl, text="Idx ≥", **_lkw).grid(row=0, column=0, sticky="w", padx=(0,4), pady=2)
         self.idx_min_e = tk.Entry(fl, width=8, **_ekw); self.idx_min_e.grid(row=0, column=1, sticky="ew", padx=(0,8), pady=2)
@@ -361,7 +361,7 @@ class IronApp:
         gc = tk.Frame(left, bg=C["panel"]); gc.pack(fill="x", padx=10, pady=6)
         self._mk_btn(gc, "🌍  Open in Geocoder", C["green"], self._launch_geocoder_ui).pack(fill="x", pady=2)
         tk.Label(gc, text="Launches GPX Geocoder on the\ncurrently loaded file",
-                 font=("Consolas",7), bg=C["panel"], fg=C["dim"],
+                 font=("Segoe UI",7), bg=C["panel"], fg=C["dim"],
                  justify="left").pack(anchor="w", padx=2)
 
         # Force scrollregion update after layout is fully resolved
@@ -375,9 +375,9 @@ class IronApp:
 
         ch = tk.Frame(center, bg=C["bg"]); ch.pack(fill="x", pady=(0,4))
         tk.Label(ch, text="TRACK POINTS",
-                 font=("Consolas",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("Segoe UI",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         self._mk_btn(ch, "⊙ Center on Sel", C["panel2"],
-                     self.center_on_selected, font=("Consolas",8)).pack(side="right")
+                     self.center_on_selected, font=("Segoe UI",8)).pack(side="right")
 
         tree_border = tk.Frame(center, bg=C["accent"], padx=1, pady=1)
         tree_border.pack(fill="both", expand=True)
@@ -403,7 +403,7 @@ class IronApp:
 
         # point count label
         self.pt_count_lbl = tk.Label(center, text="",
-                                      font=("Consolas",8), bg=C["bg"], fg=C["muted"])
+                                      font=("Segoe UI",8), bg=C["bg"], fg=C["muted"])
         self.pt_count_lbl.pack(anchor="w", pady=(3,0))
 
         # ── RIGHT — MAP ───────────────────────────────────────────────────────
@@ -412,17 +412,17 @@ class IronApp:
 
         mh = tk.Frame(map_outer, bg=C["bg"]); mh.pack(fill="x", pady=(0,4))
         tk.Label(mh, text="TRACK MAP",
-                 font=("Consolas",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("Segoe UI",8,"bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         zf = tk.Frame(mh, bg=C["bg"]); zf.pack(side="right")
         self._zoom_level = [13]
-        self._mk_btn(zf, "＋", C["panel2"], self._zoom_in,  font=("Consolas",11,"bold")).pack(side="left", padx=2)
-        self._mk_btn(zf, "－", C["panel2"], self._zoom_out, font=("Consolas",11,"bold")).pack(side="left", padx=2)
+        self._mk_btn(zf, "＋", C["panel2"], self._zoom_in,  font=("Segoe UI",11,"bold")).pack(side="left", padx=2)
+        self._mk_btn(zf, "－", C["panel2"], self._zoom_out, font=("Segoe UI",11,"bold")).pack(side="left", padx=2)
         # Undo button
-        self._mk_btn(zf, "↩ Undo", C["dim"], self.undo, font=("Consolas",8,"bold")).pack(side="left", padx=(8,2))
+        self._mk_btn(zf, "↩ Undo", C["dim"], self.undo, font=("Segoe UI",8,"bold")).pack(side="left", padx=(8,2))
         # Drag mode toggle
         self._drag_btn_var = tk.StringVar(value="✋ Drag OFF")
         self._drag_btn = self._mk_btn(zf, "✋ Drag OFF", C["dim"], self._toggle_drag_mode,
-                                       font=("Consolas",8,"bold"))
+                                       font=("Segoe UI",8,"bold"))
         self._drag_btn.pack(side="left", padx=2)
 
         map_border = tk.Frame(map_outer, bg=C["accent"], padx=2, pady=2)
@@ -453,10 +453,10 @@ class IronApp:
         sb.pack(fill="x", side="bottom")
         tk.Frame(sb, bg=C["accent"], height=2).pack(fill="x", side="bottom")
         self.status_lbl = tk.Label(sb, text="Ready. Open a GPX file to begin.",
-                                    font=("Consolas",8), bg=C["panel"], fg=C["muted"])
+                                    font=("Segoe UI",8), bg=C["panel"], fg=C["muted"])
         self.status_lbl.pack(side="left", padx=10, pady=3)
         self.dirty_lbl = tk.Label(sb, text="",
-                                   font=("Consolas",8,"bold"), bg=C["panel"], fg=C["orange"])
+                                   font=("Segoe UI",8,"bold"), bg=C["panel"], fg=C["orange"])
         self.dirty_lbl.pack(side="right", padx=10, pady=3)
 
     # ── ZOOM ───────────────────────────────────────────────────────────────────
@@ -764,15 +764,15 @@ class IronApp:
             d.title("Save options"); d.configure(bg=C["bg"]); d.resizable(False,False)
             d.grab_set()
             tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
-            tk.Label(d, text="SAVE FORMAT", font=("Consolas",10,"bold"),
+            tk.Label(d, text="SAVE FORMAT", font=("Segoe UI",10,"bold"),
                      bg=C["bg"], fg=C["accent"]).pack(padx=20, pady=(14,4), anchor="w")
             tk.Label(d, text=f"{len(self._file_segments)} files loaded — how to save?",
-                     font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w", pady=(0,10))
+                     font=("Segoe UI",8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w", pady=(0,10))
             tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
             mode_var = tk.IntVar(value=1)
             _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
                         activeforeground=C["accent"], selectcolor=C["accent2"],
-                        font=("Consolas",9), anchor="w", relief="flat")
+                        font=("Segoe UI",9), anchor="w", relief="flat")
             rf = tk.Frame(d, bg=C["bg"]); rf.pack(fill="x", padx=20, pady=10)
             tk.Radiobutton(rf, text="💾  Single merged file  (default)",
                            variable=mode_var, value=1, **_rkw).pack(fill="x", pady=3)
@@ -1131,10 +1131,10 @@ class IronApp:
         d.configure(bg=C["bg"]); d.resizable(False, False)
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
         tk.Label(d, text="SHIFT TIMESTAMPS",
-                 font=("Consolas",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(
+                 font=("Segoe UI",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(
                  padx=16, pady=(14,2), anchor="w")
         tk.Label(d, text=f"First point timestamp: {first_str}   ·   Applies to all points.",
-                 font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w", pady=(0,10))
+                 font=("Segoe UI",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w", pady=(0,10))
         tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=(0,10))
 
         # mode radio buttons
@@ -1142,22 +1142,22 @@ class IronApp:
         df = tk.Frame(d, bg=C["bg"]); df.pack(padx=16, pady=(0,8), fill="x")
         _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
                     activeforeground=C["accent"], selectcolor=C["accent2"],
-                    font=("Consolas",9), anchor="w", relief="flat")
+                    font=("Segoe UI",9), anchor="w", relief="flat")
         tk.Radiobutton(df, text="➕  Add time",         variable=dir_var, value="add",    **_rkw).pack(fill="x", pady=2)
         tk.Radiobutton(df, text="➖  Deduct time",       variable=dir_var, value="deduct", **_rkw).pack(fill="x", pady=2)
         tk.Radiobutton(df, text="🕐  Set start time",   variable=dir_var, value="setstart", **_rkw).pack(fill="x", pady=2)
 
         # entry row — label changes depending on mode
         ef = tk.Frame(d, bg=C["bg"]); ef.pack(padx=16, pady=(4,4))
-        entry_lbl = tk.Label(ef, text="Offset (HH:MM:SS):", font=("Consolas",9),
+        entry_lbl = tk.Label(ef, text="Offset (HH:MM:SS):", font=("Segoe UI",9),
                               bg=C["bg"], fg=C["text"], width=20, anchor="w")
         entry_lbl.pack(side="left", padx=(0,8))
         off_var = tk.StringVar(value="01:00:00")
-        off_e = ttk.Entry(ef, textvariable=off_var, width=12, font=("Consolas",10))
+        off_e = ttk.Entry(ef, textvariable=off_var, width=12, font=("Segoe UI",10))
         off_e.pack(side="left")
         off_e.select_range(0, "end"); off_e.focus_set()
 
-        preview_lbl = tk.Label(d, text="", font=("Consolas",8), bg=C["bg"], fg=C["muted"])
+        preview_lbl = tk.Label(d, text="", font=("Segoe UI",8), bg=C["bg"], fg=C["muted"])
         preview_lbl.pack(padx=16, anchor="w", pady=(4,10))
 
         def _update_label(*_):
@@ -1267,20 +1267,20 @@ class IronApp:
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
 
         tk.Label(d, text=f"Gap between point #{i0} and #{i1}",
-                 font=("Consolas",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(14,2), anchor="w")
+                 font=("Segoe UI",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(14,2), anchor="w")
         tk.Label(d, text=f"Current gap: {cur_m}:{cur_s:02d}",
-                 font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w", pady=(0,10))
+                 font=("Segoe UI",8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w", pady=(0,10))
 
         ef = tk.Frame(d, bg=C["bg"]); ef.pack(padx=16, pady=(0,4))
-        tk.Label(ef, text="New gap  (m:ss or mss):", font=("Consolas",9),
+        tk.Label(ef, text="New gap  (m:ss or mss):", font=("Segoe UI",9),
                  bg=C["bg"], fg=C["text"]).pack(side="left", padx=(0,8))
         gap_var = tk.StringVar(value=f"{cur_m}:{cur_s:02d}")
-        gap_e = ttk.Entry(ef, textvariable=gap_var, width=10, font=("Consolas",10))
+        gap_e = ttk.Entry(ef, textvariable=gap_var, width=10, font=("Segoe UI",10))
         gap_e.pack(side="left")
         gap_e.select_range(0, "end")
         gap_e.focus_set()
 
-        info_lbl = tk.Label(d, text="", font=("Consolas",8), bg=C["bg"], fg=C["muted"])
+        info_lbl = tk.Label(d, text="", font=("Segoe UI",8), bg=C["bg"], fg=C["muted"])
         info_lbl.pack(padx=16, anchor="w", pady=(2,8))
 
         def _parse_gap(raw):
@@ -1386,7 +1386,7 @@ class IronApp:
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
 
         tk.Label(d, text=f"Average speed  #{i0} → #{i1}",
-                 font=("Consolas",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(
+                 font=("Segoe UI",9,"bold"), bg=C["bg"], fg=C["accent"]).pack(
                  padx=16, pady=(14,2), anchor="w")
 
         info_lines = [
@@ -1396,20 +1396,20 @@ class IronApp:
             f"Current speed: {cur_speed:.1f} kph",
         ]
         for line in info_lines:
-            tk.Label(d, text=line, font=("Consolas",8), bg=C["bg"],
+            tk.Label(d, text=line, font=("Segoe UI",8), bg=C["bg"],
                      fg=C["muted"]).pack(padx=16, anchor="w")
 
         tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=(10,8))
 
         ef = tk.Frame(d, bg=C["bg"]); ef.pack(padx=16, pady=(0,4))
-        tk.Label(ef, text="Target speed (kph):", font=("Consolas",9),
+        tk.Label(ef, text="Target speed (kph):", font=("Segoe UI",9),
                  bg=C["bg"], fg=C["text"]).pack(side="left", padx=(0,8))
         spd_var = tk.StringVar(value=f"{cur_speed:.1f}")
-        spd_e = ttk.Entry(ef, textvariable=spd_var, width=10, font=("Consolas",10))
+        spd_e = ttk.Entry(ef, textvariable=spd_var, width=10, font=("Segoe UI",10))
         spd_e.pack(side="left")
         spd_e.select_range(0, "end"); spd_e.focus_set()
 
-        preview_lbl = tk.Label(d, text="", font=("Consolas",8), bg=C["bg"], fg=C["muted"])
+        preview_lbl = tk.Label(d, text="", font=("Segoe UI",8), bg=C["bg"], fg=C["muted"])
         preview_lbl.pack(padx=16, anchor="w", pady=(4,10))
 
         def _preview(*_):
@@ -1504,15 +1504,15 @@ class IronApp:
         d.grab_set()
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
         tk.Label(d, text="COMMENT FORMAT",
-                 font=("Consolas",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=20, pady=(14,4), anchor="w")
+                 font=("Segoe UI",10,"bold"), bg=C["bg"], fg=C["accent"]).pack(padx=20, pady=(14,4), anchor="w")
         tk.Label(d, text="Choose what the Geocoder will write into each trackpoint:",
-                 font=("Consolas",8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w", pady=(0,10))
+                 font=("Segoe UI",8), bg=C["bg"], fg=C["muted"]).pack(padx=20, anchor="w", pady=(0,10))
         tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=20)
 
         fmt_var = tk.IntVar(value=2)
         _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
                     activeforeground=C["accent"], selectcolor=C["accent2"],
-                    font=("Consolas",9), anchor="w", relief="flat")
+                    font=("Segoe UI",9), anchor="w", relief="flat")
         rf = tk.Frame(d, bg=C["bg"]); rf.pack(fill="x", padx=20, pady=10)
         tk.Radiobutton(rf, text="Road, Town",
                        variable=fmt_var, value=1, **_rkw).pack(fill="x", pady=2)
@@ -1621,12 +1621,12 @@ class IronApp:
 
         def _row(parent, lbl, val):
             r = tk.Frame(parent, bg=C["bg"]); r.pack(fill="x", padx=16, pady=4)
-            tk.Label(r, text=lbl, font=("Consolas",9), bg=C["bg"],
+            tk.Label(r, text=lbl, font=("Segoe UI",9), bg=C["bg"],
                      fg=C["muted"], width=6, anchor="w").pack(side="left")
-            e = ttk.Entry(r, width=22, font=("Consolas",9)); e.insert(0, str(val)); e.pack(side="left")
+            e = ttk.Entry(r, width=22, font=("Segoe UI",9)); e.insert(0, str(val)); e.pack(side="left")
             return e
 
-        tk.Label(d, text=f"Point  #{idx}", font=("Consolas",10,"bold"),
+        tk.Label(d, text=f"Point  #{idx}", font=("Segoe UI",10,"bold"),
                  bg=C["bg"], fg=C["accent"]).pack(padx=16, pady=(12,4), anchor="w")
         le  = _row(d, "Lat", lat)
         loe = _row(d, "Lon", lon)
@@ -1643,20 +1643,20 @@ class IronApp:
 
             tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=(6,0))
             tk.Label(d, text="⚠  No timestamp — assign one:",
-                     font=("Consolas",8,"bold"), bg=C["bg"], fg=C["orange"]).pack(
+                     font=("Segoe UI",8,"bold"), bg=C["bg"], fg=C["orange"]).pack(
                      padx=16, pady=(6,2), anchor="w")
 
             if prev_t:
                 tk.Label(d, text=f"Prev timestamped point: #{prev_idx}  →  {prev_t.strftime('%H:%M:%S')}",
-                         font=("Consolas",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,6))
+                         font=("Segoe UI",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,6))
             else:
                 tk.Label(d, text="No previous timestamped point found.",
-                         font=("Consolas",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,6))
+                         font=("Segoe UI",7), bg=C["bg"], fg=C["dim"]).pack(padx=16, anchor="w", pady=(0,6))
 
             mode_var = tk.StringVar(value="absolute")
             _rkw = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
                         activeforeground=C["accent"], selectcolor=C["accent2"],
-                        font=("Consolas",8), anchor="w", relief="flat")
+                        font=("Segoe UI",8), anchor="w", relief="flat")
             mf = tk.Frame(d, bg=C["bg"]); mf.pack(fill="x", padx=16)
             tk.Radiobutton(mf, text="🕐  Absolute time  (HH:MM:SS)",
                            variable=mode_var, value="absolute", **_rkw).pack(fill="x", pady=1)
@@ -1674,14 +1674,14 @@ class IronApp:
 
             # entry row below radios
             ef = tk.Frame(d, bg=C["bg"]); ef.pack(fill="x", padx=16, pady=(6,0))
-            entry_lbl = tk.Label(ef, text="Time (HH:MM:SS):", font=("Consolas",8),
+            entry_lbl = tk.Label(ef, text="Time (HH:MM:SS):", font=("Segoe UI",8),
                                  bg=C["bg"], fg=C["text"], width=24, anchor="w")
             entry_lbl.pack(side="left")
             ts_var = tk.StringVar(value=prev_t.strftime("%H:%M:%S") if prev_t else "00:00:00")
-            ts_e   = ttk.Entry(ef, textvariable=ts_var, width=14, font=("Consolas",9))
+            ts_e   = ttk.Entry(ef, textvariable=ts_var, width=14, font=("Segoe UI",9))
             ts_e.pack(side="left")
 
-            preview_ts = tk.Label(d, text="", font=("Consolas",7), bg=C["bg"], fg=C["muted"])
+            preview_ts = tk.Label(d, text="", font=("Segoe UI",7), bg=C["bg"], fg=C["muted"])
             preview_ts.pack(padx=16, anchor="w", pady=(2,6))
 
             def _update_entry_label(*_):
@@ -1779,14 +1779,14 @@ def show_splash(root):
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x")
     body = tk.Frame(sp, bg=C["bg"]); body.pack(expand=True, fill="both", padx=40)
     tk.Label(body, text="GPX IRONER",
-             font=("Consolas",22,"bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(28,4))
+             font=("Segoe UI",22,"bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(28,4))
     tk.Label(body, text=f"{VERSION}  ·  by {AUTHOR}  ·  {datetime.now().year}",
-             font=("Consolas",9), bg=C["bg"], fg=C["muted"]).pack()
+             font=("Segoe UI",9), bg=C["bg"], fg=C["muted"]).pack()
     tk.Label(body, text="clean, iron and edit GPX trackpoints",
-             font=("Consolas",9,"italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4,16))
+             font=("Segoe UI",9,"italic"), bg=C["bg"], fg=C["dim"]).pack(pady=(4,16))
     pbv = tk.DoubleVar()
     pb  = ttk.Progressbar(body, variable=pbv, maximum=100, length=540); pb.pack()
-    pct = tk.Label(body, text="Loading…", font=("Consolas",8), bg=C["bg"], fg=C["dim"])
+    pct = tk.Label(body, text="Loading…", font=("Segoe UI",8), bg=C["bg"], fg=C["dim"])
     pct.pack(pady=4)
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x", side="bottom")
     sp.lift(); sp.attributes("-topmost", True)

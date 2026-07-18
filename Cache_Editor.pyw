@@ -152,7 +152,7 @@ def db_read_all(db_path, sql, params=()):
 # ──────────────────────────────────────────────────────────────────────────────
 # UI HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
-def mk_btn(parent, text, bg, cmd, width=None, font=("Consolas", 9, "bold")):
+def mk_btn(parent, text, bg, cmd, width=None, font=("segoe ui", 9, "bold")):
     kw = dict(
         text=text, bg=bg,
         fg="white" if bg not in (C["dim"], C["panel2"]) else C["muted"],
@@ -165,20 +165,20 @@ def mk_btn(parent, text, bg, cmd, width=None, font=("Consolas", 9, "bold")):
 
 def sec_hdr(parent, text):
     f = tk.Frame(parent, bg=C["panel"]); f.pack(fill="x", padx=10, pady=(12, 3))
-    tk.Label(f, text=text, font=("Consolas", 8, "bold"),
+    tk.Label(f, text=text, font=("segoe ui", 8, "bold"),
              bg=C["panel"], fg=C["accent"]).pack(side="left")
     tk.Frame(parent, bg=C["border"], height=1).pack(fill="x", padx=10)
 
 def lbl_entry(parent, label_text, width=8):
     r = tk.Frame(parent, bg=C["panel"]); r.pack(side="left", padx=(0, 6))
-    tk.Label(r, text=label_text, font=("Consolas", 8),
+    tk.Label(r, text=label_text, font=("segoe ui", 8),
              bg=C["panel"], fg=C["muted"]).pack(side="left", padx=(0, 2))
     e = tk.Entry(r, width=width,
                   bg=C["panel2"], fg=C["text"],
                   insertbackground=C["text"], relief="flat",
                   highlightthickness=1, highlightcolor=C["accent"],
                   highlightbackground=C["border"],
-                  font=("Consolas", 9))
+                  font=("segoe ui", 9))
     e.pack(side="left")
     return e
 
@@ -199,7 +199,7 @@ class CacheEditor:
         # ttk style
         sty = ttk.Style(root); sty.theme_use("clam")
         sty.configure(".",          background=C["bg"],    foreground=C["text"])
-        sty.configure("TLabel",     background=C["bg"],    foreground=C["text"], font=("Consolas", 9))
+        sty.configure("TLabel",     background=C["bg"],    foreground=C["text"], font=("segoe ui", 9))
         sty.configure("TFrame",     background=C["bg"])
         sty.configure("TScrollbar", background=C["panel2"], troughcolor=C["border"],
                                     arrowcolor=C["muted"])
@@ -228,6 +228,8 @@ class CacheEditor:
         self._focus_dot_pts       = []     # (lat,lon) list for current focus dots
         self._dot_redraw_pending  = False  # debounce flag
         self.area_mode            = False
+        self._undo_stack          = []     # list of (description, [(key,row_dict), ...])
+        self._UNDO_LIMIT          = 10
         self._press_x             = 0
         self._press_y             = 0
 
@@ -235,6 +237,7 @@ class CacheEditor:
 
         # Esc → cancel area mode
         root.bind("<Escape>", lambda e: self._cancel_area_mode())
+        root.bind("<Control-z>", lambda e: self.undo_last_action())
 
     # ──────────────────────────────────────────────────────────────────────────
     # BUILD UI
@@ -244,9 +247,9 @@ class CacheEditor:
         tk.Frame(self.root, bg=C["accent"], height=3).pack(fill="x")
         tb = tk.Frame(self.root, bg=C["bg"]); tb.pack(fill="x", padx=16, pady=5)
         tk.Label(tb, text="CACHE EDITOR",
-                 font=("Consolas", 13, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("segoe ui", 13, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         tk.Label(tb, text=f"{VERSION}  ·  {AUTHOR}  ·  2025–{datetime.now().year}",
-                 font=("Consolas", 8), bg=C["bg"], fg=C["dim"]).pack(side="right")
+                 font=("segoe ui", 8), bg=C["bg"], fg=C["dim"]).pack(side="right")
         tk.Frame(self.root, bg=C["border"], height=1).pack(fill="x")
 
         # Body
@@ -297,7 +300,7 @@ class CacheEditor:
         mk_btn(db_f, "💾  Backup DB Now",  C["dim"],  self.backup_db).pack(fill="x", pady=2)
         mk_btn(db_f, "🔄  Reload Stats",   C["dim"],  self.print_cache_stats).pack(fill="x", pady=2)
         self._db_lbl = tk.Label(db_f, text="No database loaded",
-                                 font=("Consolas", 7, "italic"), bg=C["panel"],
+                                 font=("segoe ui", 7, "italic"), bg=C["panel"],
                                  fg=C["muted"], wraplength=260, anchor="w")
         self._db_lbl.pack(anchor="w", pady=(2, 0))
 
@@ -308,7 +311,7 @@ class CacheEditor:
         mk_btn(gpx_f, "🗺  Fit Track",         C["dim"],  self.fit_track).pack(fill="x", pady=2)  # NEW
 
         tk.Label(left, text="TRACKS",
-                 font=("Consolas", 7, "bold"), bg=C["panel"],
+                 font=("segoe ui", 7, "bold"), bg=C["panel"],
                  fg=C["muted"]).pack(padx=10, anchor="w", pady=(4, 1))
         lb_border = tk.Frame(left, bg=C["accent"], padx=1, pady=1)
         lb_border.pack(fill="x", padx=10, pady=(0, 4))
@@ -319,7 +322,7 @@ class CacheEditor:
                                          selectbackground=C["accent"],
                                          selectforeground="black",
                                          activestyle="none", relief="flat",
-                                         borderwidth=0, font=("Consolas", 8),
+                                         borderwidth=0, font=("segoe ui", 8),
                                          yscrollcommand=lb_sb.set)
         self.track_listbox.pack(side="left", fill="both", expand=True)
         lb_sb.config(command=self.track_listbox.yview)
@@ -331,7 +334,7 @@ class CacheEditor:
 
         md_row = tk.Frame(md_f, bg=C["panel"]); md_row.pack(fill="x")
         tk.Label(md_row, text="Pin every",
-                 font=("Consolas", 8), bg=C["panel"], fg=C["muted"]).pack(side="left")
+                 font=("segoe ui", 8), bg=C["panel"], fg=C["muted"]).pack(side="left")
 
         self._density_var = tk.StringVar(value=str(self.marker_density))
         density_entry = tk.Entry(md_row, textvariable=self._density_var, width=5,
@@ -339,29 +342,29 @@ class CacheEditor:
                                   insertbackground=C["text"], relief="flat",
                                   highlightthickness=1, highlightcolor=C["accent"],
                                   highlightbackground=C["border"],
-                                  font=("Consolas", 9), justify="center")
+                                  font=("segoe ui", 9), justify="center")
         density_entry.pack(side="left", padx=4)
         density_entry.bind("<Return>",   lambda e: self._apply_density())
         density_entry.bind("<FocusOut>", lambda e: self._apply_density())
 
         tk.Label(md_row, text="pts",
-                 font=("Consolas", 8), bg=C["panel"], fg=C["muted"]).pack(side="left")
+                 font=("segoe ui", 8), bg=C["panel"], fg=C["muted"]).pack(side="left")
         mk_btn(md_row, "Apply", C["dim"], self._apply_density,
-               font=("Consolas", 8, "bold")).pack(side="left", padx=(6, 0))
+               font=("segoe ui", 8, "bold")).pack(side="left", padx=(6, 0))
 
         # Dots toggle (OFF by default — can be slow on large tracks)
         self._dots_btn = mk_btn(md_f, "· · ·  Show all points: OFF", C["dim"],
-                                self._toggle_show_dots, font=("Consolas", 8, "bold"))
+                                self._toggle_show_dots, font=("segoe ui", 8, "bold"))
         self._dots_btn.pack(fill="x", pady=(6, 0))
         tk.Label(md_f, text="Shows a dot at every point position. May be slow on large tracks.",
-                 font=("Consolas", 7), bg=C["panel"], fg=C["dim"],
+                 font=("segoe ui", 7), bg=C["panel"], fg=C["dim"],
                  justify="left", wraplength=260).pack(anchor="w", pady=(2, 0))
 
         # — Map focus ————————————————————————————————————————————————————————
         sec_hdr(left, "MAP FOCUS")
         foc_f = tk.Frame(left, bg=C["panel"]); foc_f.pack(fill="x", padx=10, pady=6)
         tk.Label(foc_f, text="Focus from index …",
-                 font=("Consolas", 7), bg=C["panel"], fg=C["muted"]).pack(anchor="w")
+                 font=("segoe ui", 7), bg=C["panel"], fg=C["muted"]).pack(anchor="w")
         fi = tk.Frame(foc_f, bg=C["panel"]); fi.pack(fill="x", pady=(2, 4))
         self.focus_from_entry = lbl_entry(fi, "From:", width=7)
         self.focus_to_entry   = lbl_entry(fi, "To:",   width=7)
@@ -369,12 +372,12 @@ class CacheEditor:
         mk_btn(fb, "🔍  Apply Focus", C["blue"],  self.apply_focus).pack(side="left", expand=True, fill="x", padx=(0, 2))
         mk_btn(fb, "✕  Clear Focus",  C["dim"],   self.clear_focus).pack(side="left", expand=True, fill="x", padx=(2, 0))
         self.focus_label = tk.Label(foc_f, text="Not active",
-                                     font=("Consolas", 7, "italic"),
+                                     font=("segoe ui", 7, "italic"),
                                      bg=C["panel"], fg=C["dim"])
         self.focus_label.pack(anchor="w", pady=(4, 0))
         tk.Label(foc_f,
                  text="Hides points outside range. Dots shown per point.",
-                 font=("Consolas", 7), bg=C["panel"], fg=C["dim"],
+                 font=("segoe ui", 7), bg=C["panel"], fg=C["dim"],
                  justify="left").pack(anchor="w", pady=(2, 0))
 
         # — Range selection ———————————————————————————————————————————————————
@@ -396,7 +399,7 @@ class CacheEditor:
         mk_btn(rng_f, "Apply Manual Indices", C["blue"], self.apply_manual_indices).pack(fill="x", pady=(2, 0))
 
         self.range_label = tk.Label(rng_f, text="No selection",
-                                     font=("Consolas", 8), bg=C["panel"], fg=C["muted"])
+                                     font=("segoe ui", 8), bg=C["panel"], fg=C["muted"])
         self.range_label.pack(anchor="w", pady=(6, 2))
         mk_btn(rng_f, "✕  Clear Selection", C["dim"], self.clear_selection).pack(fill="x", pady=(2, 0))
 
@@ -407,6 +410,14 @@ class CacheEditor:
         mk_btn(act_f, "✏  Edit Selected Range",     C["orange"], self.open_edit_dialog).pack(fill="x", pady=2)
         mk_btn(act_f, "⬛  Select Area (4 clicks)",  C["teal"],   self.activate_area_selection).pack(fill="x", pady=2)
         mk_btn(act_f, "🔄  Re-geocode GPX",          C["green"],  self.regeocode_gpx).pack(fill="x", pady=2)
+        tk.Frame(act_f, bg=C["border"], height=1).pack(fill="x", pady=(6, 2))
+        self._undo_btn = mk_btn(act_f, "↩  Undo last action  (Ctrl+Z)", C["dim"],
+                                self.undo_last_action)
+        self._undo_btn.pack(fill="x", pady=2)
+        self._undo_lbl = tk.Label(act_f, text="Nothing to undo",
+                                   font=("segoe ui", 7, "italic"),
+                                   bg=C["panel"], fg=C["dim"])
+        self._undo_lbl.pack(anchor="w", pady=(0, 2))
 
         # ── CENTER — PREVIEW ──────────────────────────────────────────────────
         center = tk.Frame(body, bg=C["bg"], width=380)
@@ -415,7 +426,7 @@ class CacheEditor:
 
         ph = tk.Frame(center, bg=C["bg"]); ph.pack(fill="x", pady=(0, 4))
         tk.Label(ph, text="POINT PREVIEW",
-                 font=("Consolas", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("segoe ui", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
 
         prev_border = tk.Frame(center, bg=C["accent"], padx=1, pady=1)
         prev_border.pack(fill="both", expand=True)
@@ -423,7 +434,7 @@ class CacheEditor:
         prev_inner.pack(fill="both", expand=True)
         psb = ttk.Scrollbar(prev_inner, orient="vertical"); psb.pack(side="right", fill="y")
         self.preview = tk.Text(prev_inner, bg=C["panel2"], fg=C["text"],
-                                insertbackground=C["text"], font=("Consolas", 9),
+                                insertbackground=C["text"], font=("segoe ui", 9),
                                 relief="flat", borderwidth=0, wrap="word",
                                 yscrollcommand=psb.set)
         self.preview.pack(side="left", fill="both", expand=True)
@@ -435,10 +446,10 @@ class CacheEditor:
 
         mh = tk.Frame(map_outer, bg=C["bg"]); mh.pack(fill="x", pady=(0, 4))
         tk.Label(mh, text="TRACK MAP",
-                 font=("Consolas", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+                 font=("segoe ui", 8, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
         zf = tk.Frame(mh, bg=C["bg"]); zf.pack(side="right")
-        mk_btn(zf, "＋", C["panel2"], self._zoom_in,  font=("Consolas", 11, "bold")).pack(side="left", padx=2)
-        mk_btn(zf, "－", C["panel2"], self._zoom_out, font=("Consolas", 11, "bold")).pack(side="left", padx=2)
+        mk_btn(zf, "＋", C["panel2"], self._zoom_in,  font=("segoe ui", 11, "bold")).pack(side="left", padx=2)
+        mk_btn(zf, "－", C["panel2"], self._zoom_out, font=("segoe ui", 11, "bold")).pack(side="left", padx=2)
 
         map_border = tk.Frame(map_outer, bg=C["accent"], padx=2, pady=2)
         map_border.pack(fill="both", expand=True)
@@ -457,7 +468,7 @@ class CacheEditor:
         sb.pack(fill="x", side="bottom")
         tk.Frame(sb, bg=C["accent"], height=2).pack(fill="x", side="bottom")
         self._status_label = tk.Label(sb, text="Ready. Open a cache DB to begin.",
-                                       font=("Consolas", 8), bg=C["panel"], fg=C["muted"])
+                                       font=("segoe ui", 8), bg=C["panel"], fg=C["muted"])
         self._status_label.pack(side="left", padx=10, pady=3)
 
         # Register map click via official API (reliable coords across all versions).
@@ -721,12 +732,12 @@ class CacheEditor:
 
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
         tk.Label(d, text="MULTIPLE SEGMENTS IN POLYGON",
-                 font=("Consolas", 10, "bold"), bg=C["bg"], fg=C["accent"]).pack(
+                 font=("segoe ui", 10, "bold"), bg=C["bg"], fg=C["accent"]).pack(
                  padx=16, pady=(12, 2), anchor="w")
         tk.Label(d,
                  text=f"The polygon matched {len(segments)} separate segments.\n"
                       "Select one to apply, or choose all (applies the full span).",
-                 font=("Consolas", 8), bg=C["bg"], fg=C["muted"],
+                 font=("segoe ui", 8), bg=C["bg"], fg=C["muted"],
                  justify="left").pack(padx=16, anchor="w", pady=(0, 8))
         tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16)
 
@@ -735,7 +746,7 @@ class CacheEditor:
         lf.pack(fill="both", expand=True, padx=16, pady=8)
         li = tk.Frame(lf, bg=C["panel2"]); li.pack(fill="both", expand=True)
         lsb = ttk.Scrollbar(li, orient="vertical"); lsb.pack(side="right", fill="y")
-        listbox = tk.Listbox(li, yscrollcommand=lsb.set, font=("Consolas", 9),
+        listbox = tk.Listbox(li, yscrollcommand=lsb.set, font=("segoe ui", 9),
                              bg=C["panel2"], fg=C["text"],
                              selectbackground=C["accent"], selectforeground="black",
                              activestyle="none", relief="flat", borderwidth=0,
@@ -1223,6 +1234,15 @@ class CacheEditor:
             f"This WILL delete cache entries for {len(pts)} points.\nBackup recommended.\nProceed?"):
             return
         bpath   = ensure_backup(self.db_path)
+        # Snapshot rows BEFORE deleting (for undo)
+        snapshot = []
+        for lat, lon, _ in pts:
+            k = cache_key(lat, lon)
+            snap_rows = db_read_all(self.db_path,
+                "SELECT key,road,town,province,country3,country2,source,timestamp "
+                "FROM geocode_cache WHERE key=?", (k,))
+            if snap_rows:
+                snapshot.append(snap_rows[0])
         deleted = 0
         for lat, lon, _ in pts:
             try:
@@ -1231,6 +1251,8 @@ class CacheEditor:
                 deleted += rc
             except Exception as ex:
                 print("delete error:", ex)
+        if snapshot:
+            self._push_undo(f"Delete {len(snapshot)} rows (pts {s}–{e})", snapshot)
         messagebox.showinfo("Done", f"Deleted approx {deleted} rows.\nBackup saved at:\n{bpath}")
         self._clear_selection_path()
         self.print_cache_stats()
@@ -1249,28 +1271,28 @@ class CacheEditor:
 
         tk.Frame(d, bg=C["accent"], height=2).pack(fill="x")
         tk.Label(d, text="EDIT SELECTED RANGE",
-                 font=("Consolas", 10, "bold"), bg=C["bg"], fg=C["accent"]).pack(
+                 font=("segoe ui", 10, "bold"), bg=C["bg"], fg=C["accent"]).pack(
                  padx=16, pady=(12, 4), anchor="w")
         tk.Label(d, text="Check 'Keep' to leave a field unchanged:",
-                 font=("Consolas", 8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
+                 font=("segoe ui", 8), bg=C["bg"], fg=C["muted"]).pack(padx=16, anchor="w")
         tk.Frame(d, bg=C["border"], height=1).pack(fill="x", padx=16, pady=8)
 
         frm = tk.Frame(d, bg=C["bg"]); frm.pack(fill="x", padx=16, pady=(0, 8))
         _ck = dict(bg=C["bg"], fg=C["text"], activebackground=C["bg"],
                    activeforeground=C["accent"], selectcolor=C["accent2"],
-                   font=("Consolas", 9), relief="flat")
+                   font=("segoe ui", 9), relief="flat")
 
         self.keep_road = tk.BooleanVar(value=True)   # checked by default
         tk.Checkbutton(frm, text="Keep road (leave unchanged)",
                         variable=self.keep_road, **_ck).grid(row=0, column=0, columnspan=2, sticky="w")
-        tk.Label(frm, text="Road:", font=("Consolas", 9),
+        tk.Label(frm, text="Road:", font=("segoe ui", 9),
                   bg=C["bg"], fg=C["muted"]).grid(row=1, column=0, sticky="e", padx=(0, 6), pady=4)
         self.road_entry = tk.Entry(frm, width=42,
                                     bg=C["panel2"], fg=C["text"],
                                     insertbackground=C["text"], relief="flat",
                                     highlightthickness=1, highlightcolor=C["accent"],
                                     highlightbackground=C["border"],
-                                    font=("Consolas", 9))
+                                    font=("segoe ui", 9))
         self.road_entry.grid(row=1, column=1, pady=4)
         # Typing in the box automatically unchecks "Keep"
         self.road_entry.bind("<Key>", lambda e: self.root.after(0, lambda:
@@ -1279,14 +1301,14 @@ class CacheEditor:
         self.keep_town = tk.BooleanVar(value=True)   # checked by default
         tk.Checkbutton(frm, text="Keep town (leave unchanged)",
                         variable=self.keep_town, **_ck).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        tk.Label(frm, text="Town:", font=("Consolas", 9),
+        tk.Label(frm, text="Town:", font=("segoe ui", 9),
                   bg=C["bg"], fg=C["muted"]).grid(row=3, column=0, sticky="e", padx=(0, 6), pady=4)
         self.town_entry = tk.Entry(frm, width=42,
                                     bg=C["panel2"], fg=C["text"],
                                     insertbackground=C["text"], relief="flat",
                                     highlightthickness=1, highlightcolor=C["accent"],
                                     highlightbackground=C["border"],
-                                    font=("Consolas", 9))
+                                    font=("segoe ui", 9))
         self.town_entry.grid(row=3, column=1, pady=4)
         # Typing in the box automatically unchecks "Keep"
         self.town_entry.bind("<Key>", lambda e: self.root.after(0, lambda:
@@ -1315,6 +1337,15 @@ class CacheEditor:
             f"Town: {'(unchanged)' if keep_town else new_town}"):
             return
         bpath   = ensure_backup(self.db_path)
+        # Snapshot FULL rows before modifying (for undo)
+        snapshot = []
+        for lat, lon, _ in pts:
+            k = cache_key(lat, lon)
+            snap_rows = db_read_all(self.db_path,
+                "SELECT key,road,town,province,country3,country2,source,timestamp "
+                "FROM geocode_cache WHERE key=?", (k,))
+            if snap_rows:
+                snapshot.append(snap_rows[0])
         updated = 0
         for lat, lon, _ in pts:
             k = cache_key(lat, lon)
@@ -1337,6 +1368,8 @@ class CacheEditor:
                 updated += rc
             except Exception as ex:
                 print("update error:", ex)
+        if snapshot:
+            self._push_undo(f"Edit {len(snapshot)} rows (pts {s}–{e})", snapshot)
         messagebox.showinfo("Done", f"Updated {updated} rows.\nBackup at:\n{bpath}")
         edit_window.destroy()
         self._clear_area_rect()
@@ -1424,6 +1457,60 @@ class CacheEditor:
             messagebox.showinfo("Backup created", f"Backup written to:\n{dst}")
         except Exception as ex:
             messagebox.showerror("Backup error", f"Failed to create backup:\n{ex}")
+
+    # ── undo ──────────────────────────────────────────────────────────────────
+    def _push_undo(self, description, snapshot_rows):
+        """Push a snapshot onto the undo stack.
+        snapshot_rows: list of (key,road,town,province,country3,country2,source,timestamp) tuples.
+        """
+        self._undo_stack.append((description, snapshot_rows))
+        if len(self._undo_stack) > self._UNDO_LIMIT:
+            self._undo_stack.pop(0)
+        self._refresh_undo_ui()
+
+    def _refresh_undo_ui(self):
+        if not self._undo_stack:
+            try:
+                self._undo_btn.config(bg=C["dim"], fg=C["muted"])
+                self._undo_lbl.config(text="Nothing to undo", fg=C["dim"])
+            except Exception: pass
+        else:
+            desc = self._undo_stack[-1][0]
+            n    = len(self._undo_stack)
+            try:
+                self._undo_btn.config(bg=C["orange"], fg="white")
+                self._undo_lbl.config(
+                    text=f"Last: {desc}  ({n} level{'s' if n>1 else ''} available)",
+                    fg=C["accent"])
+            except Exception: pass
+
+    def undo_last_action(self):
+        if not self.db_path:
+            messagebox.showwarning("No DB", "Open a cache DB first."); return
+        if not self._undo_stack:
+            self.status_message("Nothing to undo."); return
+        desc, snapshot_rows = self._undo_stack.pop()
+        msg = (f"Undo: {desc}\n\n"
+               f"This will restore {len(snapshot_rows)} cache rows to their previous state.\n"
+               "A backup will be created first. Proceed?")
+        if not messagebox.askyesno("Confirm undo", msg):
+            self._undo_stack.append((desc, snapshot_rows))  # put it back
+            return
+        ensure_backup(self.db_path)
+        restored = 0
+        for row in snapshot_rows:
+            # row = (key, road, town, province, country3, country2, source, timestamp)
+            try:
+                db_write_execute(self.db_path,
+                    "INSERT OR REPLACE INTO geocode_cache "
+                    "(key, road, town, province, country3, country2, source, timestamp) "
+                    "VALUES (?,?,?,?,?,?,?,?)", row)
+                restored += 1
+            except Exception as ex:
+                print("undo error:", ex)
+        self._refresh_undo_ui()
+        self.status_message(f"Undo complete: restored {restored} rows  ←  {desc}")
+        self.print_cache_stats()
 
     # ── auto-load helpers (called at startup when launched from geocoder) ───────
     def _autoload_db(self, db_path):

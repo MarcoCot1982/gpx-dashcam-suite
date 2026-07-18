@@ -838,14 +838,14 @@ def show_splash(root, canvas):
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x")
     body = tk.Frame(sp, bg=C["bg"]); body.pack(expand=True, fill="both", padx=48)
     tk.Label(body, text="GPX DASHCAM SUITE",
-             font=("Consolas", 22, "bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(26, 4))
+             font=("segoe ui", 22, "bold"), bg=C["bg"], fg=C["accent"]).pack(pady=(26, 4))
     tk.Label(body, text=f"{VERSION}  \u00b7  by {AUTHOR}  \u00b7  {datetime.now().year}",
-             font=("Consolas", 9), bg=C["bg"], fg=C["muted"]).pack()
+             font=("segoe ui", 9), bg=C["bg"], fg=C["muted"]).pack()
     pbv  = tk.DoubleVar()
     pbar = ttk.Progressbar(body, variable=pbv, maximum=100, length=560)
     pbar.pack(pady=(18, 4))
     msg  = tk.Label(body, text="Loading map\u2026",
-                    font=("Consolas", 8), bg=C["bg"], fg=C["dim"]); msg.pack()
+                    font=("segoe ui", 8), bg=C["bg"], fg=C["dim"]); msg.pack()
     tk.Frame(sp, bg=C["accent"], height=3).pack(fill="x", side="bottom")
 
     # ── fetch tiles in a thread, update progress bar via after() ──────────────
@@ -963,7 +963,7 @@ root.resizable(True, True)
 sty = ttk.Style(root); sty.theme_use("clam")
 sty.configure(".",      background=C["bg"], foreground=C["text"])
 sty.configure("TLabel", background=C["bg"], foreground=C["text"],
-               font=("Consolas", 9))
+               font=("segoe ui", 9))
 sty.configure("TFrame", background=C["bg"])
 sty.configure("Horizontal.TProgressbar",
                background=C["accent"], troughcolor=C["panel"],
@@ -976,20 +976,20 @@ sty.configure("TScrollbar", background=C["panel"], troughcolor=C["bg"],
 tk.Frame(root, bg=C["accent"], height=3).pack(fill="x")
 tb = tk.Frame(root, bg=C["bg"]); tb.pack(fill="x", padx=20, pady=6)
 tk.Label(tb, text="GPX DASHCAM SUITE  \u2014  ROAD MAP",
-         font=("Consolas", 13, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
+         font=("segoe ui", 13, "bold"), bg=C["bg"], fg=C["accent"]).pack(side="left")
 tk.Label(tb, text=f"{VERSION}  \u00b7  {AUTHOR}  \u00b7  {datetime.now().year}",
-         font=("Consolas", 8), bg=C["bg"], fg=C["dim"]).pack(side="right")
+         font=("segoe ui", 8), bg=C["bg"], fg=C["dim"]).pack(side="right")
 tk.Frame(root, bg=C["border"], height=1).pack(fill="x")
 
 # ── Status bar ────────────────────────────────────────────────────────────────
 sb = tk.Frame(root, bg=C["panel"], height=26); sb.pack(fill="x", side="bottom")
 tk.Frame(sb, bg=C["accent"], height=2).pack(fill="x", side="bottom")
 status_lbl = tk.Label(sb, text="Click a stop to see details and launch the app.",
-                       font=("Consolas", 8), bg=C["panel"], fg=C["muted"])
+                       font=("segoe ui", 8), bg=C["panel"], fg=C["muted"])
 status_lbl.pack(side="left", padx=12, pady=3)
 _status_ref[0] = status_lbl
 tk.Label(sb, text=f"Suite dir:  {SCRIPT_DIR}",
-         font=("Consolas", 7), bg=C["panel"], fg=C["dim"]).pack(side="right", padx=12, pady=3)
+         font=("segoe ui", 7), bg=C["panel"], fg=C["dim"]).pack(side="right", padx=12, pady=3)
 
 # ── Canvas (scrollable) ───────────────────────────────────────────────────────
 cv_frame = tk.Frame(root, bg=C["bg"]); cv_frame.pack(fill="both", expand=True)
@@ -1046,7 +1046,7 @@ def _refresh_map():
     threading.Thread(target=_refetch, daemon=True).start()
 
 refresh_btn = tk.Button(sb, text="\u21bb  Refresh Map",
-                         font=("Consolas", 7), bg=C["panel"], fg=C["muted"],
+                         font=("segoe ui", 7), bg=C["panel"], fg=C["muted"],
                          activebackground=C["panel"], activeforeground=C["accent"],
                          relief="flat", cursor="hand2",
                          command=_refresh_map)
