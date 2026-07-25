@@ -34,7 +34,7 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 RESOLUTIONS={"854 × 480  (480p)":(854,480),"1280 × 720  (720p)":(1280,720),"1920 × 1080 (1080p)":(1920,1080)}
-FPS_OPTIONS=[24,30,60]
+FPS_OPTIONS=[1,2,5,10,24,30,60]
 
 C={"bg":"#141414","panel":"#1e1e1e","panel2":"#252525","border":"#333333",
    "accent":"#f5a623","accent2":"#e8941a","green":"#4caf50","red":"#e53935",
@@ -268,7 +268,7 @@ def _render_chunk(comments, cum_times, chunk_start, chunk_end, n_pts,
         fig.subplots_adjust(left=0,right=1,top=1,bottom=0); ax.set_axis_off()
         ax.axhline(y=0.22,color=tc,linewidth=0.4,alpha=0.25)
         ax.text(xp, 0.18, cc_text, color=tc, fontsize=cs, ha=ha, va="top",
-                transform=ax.transAxes, fontfamily="monospace")
+                transform=ax.transAxes, fontfamily="Segoe UI")
         ax.text(xp, 0.05, ct_str, color=tc, fontsize=ts_sz, ha=ha, va="top",
                 transform=ax.transAxes, alpha=0.65)
 
@@ -664,7 +664,7 @@ stop_event=threading.Event(); ui_queue=queue.Queue(); pause_btn_ref=[None]
 map_path_obj=[None]; map_marker_obj=[None]; map_all_coords=[]; _last_pt=[- 1]
 current_zoom=[12]
 
-res_var=tk.StringVar(value="1280 × 720  (720p)"); fps_var=tk.IntVar(value=24)
+res_var=tk.StringVar(value="1280 × 720  (720p)"); fps_var=tk.IntVar(value=2)
 bg_color_var=tk.StringVar(value="#000000"); txt_color_var=tk.StringVar(value="#ffffff")
 cmt_size_var=tk.IntVar(value=20); ts_size_var=tk.IntVar(value=13)
 align_var=tk.StringVar(value="right"); dest_var=tk.IntVar(value=2); custom_dest=tk.StringVar(value="")
